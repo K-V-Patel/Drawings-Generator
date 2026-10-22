@@ -248,6 +248,74 @@ def _trim(value: float) -> str:
     return f"{value:.4f}".rstrip("0").rstrip(".")
 
 
+_SIZE_TOKEN = r"(?:\d+\s+\d+/\d+|\d+-\d+/\d+|\d+/\d+|\d+(?:\.\d+)?|\.\d+|¼|½|¾|⅛|⅜|⅝|⅞)"
+_SIZE_TRIPLE = re.compile(
+    rf"(?:^|[^\w.])(?P<a>{_SIZE_TOKEN})\s*(?P<ua>in(?:ch(?:es)?)?|mm|cm|\")?\s*[x×]\s*"
+    rf"(?P<b>{_SIZE_TOKEN})\s*(?P<ub>in(?:ch(?:es)?)?|mm|cm|\")?\s*[x×]\s*"
+    rf"(?P<c>{_SIZE_TOKEN})\s*(?P<uc>in(?:ch(?:es)?)?|mm|cm|\")?",
+    re.IGNORECASE,
+)
+_UNICODE_FRACTIONS = {"¼": 0.25, "½": 0.5, "¾": 0.75, "⅛": 0.125, "⅜": 0.375, "⅝": 0.625, "⅞": 0.875}
+
+
+def size_from_text(text: str) -> dict:
+    """Length, width, and thickness written as 3.75 x 3.75 x 1/4."""
+    if not text:
+        return {}
+    match = _SIZE_TRIPLE.search(str(text))
+    if not match:
+        return {}
+    length = _token_inches(match.group("a"), match.group("ua"))
+    width = _token_inches(match.group("b"), match.group("ub"))
+    height = _token_inches(match.group("c"), match.group("uc"))
+    if not (_positive(length) and _positive(width) and _positive(height)):
+        return {}
+    return {"length": _round(length), "width": _round(width), "height": _round(height)}
+
+
+def apply_described_size(properties: dict | None, overall: dict | None) -> tuple[dict, dict, bool]:
+    """Fill a missing envelope from a description such as 3.75 x 3.75 x 1/4."""
+    props = dict(properties or {})
+    size = dict(overall or {})
+    if all(_positive(size.get(key)) for key in ("length", "width", "height")):
+        return props, size, False
+    text = " ".join(str(props.get(key) or "") for key in ("description", "title", "subject", "comments"))
+    found = size_from_text(text)
+    if not found:
+        return props, size, False
+    changed = False
+    for key in ("length", "width", "height"):
+        if not _positive(size.get(key)):
+            size[key] = found[key]
+            changed = True
+    if changed and not str(props.get("thickness") or "").strip():
+        props["thickness"] = _trim(found["height"])
+    return props, size, changed
+
+
+def _token_inches(token: str, unit: str | None) -> float | None:
+    token = token.strip()
+    if token in _UNICODE_FRACTIONS:
+        number = _UNICODE_FRACTIONS[token]
+    else:
+        mixed = re.fullmatch(r"(\d+)[\s-](\d+)/(\d+)", token)
+        if mixed:
+            denominator = float(mixed.group(3))
+            if denominator == 0:
+                return None
+            number = float(mixed.group(1)) + float(mixed.group(2)) / denominator
+        elif re.fullmatch(r"\d+/\d+", token):
+            numerator, denominator = token.split("/")
+            if float(denominator) == 0:
+                return None
+            number = float(numerator) / float(denominator)
+        else:
+            number = float(token)
+    if unit:
+        return inches_from(f"{number} {unit}")
+    return inches_from(number)
+
+
 def _norm(name: str) -> str:
     return re.sub(r"[\s_\-]+", "", name or "").lower()
 

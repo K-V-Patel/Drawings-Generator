@@ -248,6 +248,19 @@ def _effective_template(template: dict, job: dict) -> dict:
     return resolved
 
 
+def _apply_described_size(job: dict) -> bool:
+    from app.inventor_file import apply_described_size
+
+    props, overall, changed = apply_described_size(job.get("properties") or {}, (job.get("model") or {}).get("overall"))
+    if not changed:
+        return False
+    model = dict(job.get("model") or {})
+    model["overall"] = overall
+    job["properties"] = props
+    job["model"] = model
+    return True
+
+
 def _drawable(job: dict) -> bool:
     model = job.get("model") or {}
     overall = model.get("overall") or {}
@@ -517,6 +530,12 @@ def generate_job(job_id: str):
     job = _job_from_row(row)
     if len(job["selectedViews"]) < 2:
         raise ValueError("Ask for at least 2 views before generating the sheet.")
+    if _apply_described_size(job):
+        with connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET properties_json = ?, model_json = ? WHERE id = ?",
+                (dumps(job["properties"]), dumps(job["model"]), job_id),
+            )
     if not _drawable(job):
         raise ValueError(
             "This file has no profiles and no overall size."

@@ -492,6 +492,43 @@ thickness values are converted to inches and become the sheet envelope.
     return null;
   }
 
+  const SIZE_TOKEN = "(?:\\d+\\s+\\d+/\\d+|\\d+-\\d+/\\d+|\\d+/\\d+|\\d+(?:\\.\\d+)?|\\.\\d+|[¼½¾⅛⅜⅝⅞])";
+  const SIZE_TRIPLE = new RegExp(
+    `(?:^|[^\\w.])(${SIZE_TOKEN})\\s*(in(?:ch(?:es)?)?|mm|cm|")?\\s*[x×]\\s*(${SIZE_TOKEN})\\s*(in(?:ch(?:es)?)?|mm|cm|")?\\s*[x×]\\s*(${SIZE_TOKEN})\\s*(in(?:ch(?:es)?)?|mm|cm|")?`,
+    "i",
+  );
+  const UNICODE_FRACTIONS = { "¼": 0.25, "½": 0.5, "¾": 0.75, "⅛": 0.125, "⅜": 0.375, "⅝": 0.625, "⅞": 0.875 };
+
+  function tokenInches(token, unit) {
+    let number;
+    if (UNICODE_FRACTIONS[token] != null) number = UNICODE_FRACTIONS[token];
+    else {
+      const mixed = /^(\d+)[\s-](\d+)\/(\d+)$/.exec(token);
+      if (mixed) {
+        const denominator = Number(mixed[3]);
+        if (!denominator) return null;
+        number = Number(mixed[1]) + Number(mixed[2]) / denominator;
+      } else if (/^\d+\/\d+$/.test(token)) {
+        const parts = token.split("/");
+        const denominator = Number(parts[1]);
+        if (!denominator) return null;
+        number = Number(parts[0]) / denominator;
+      } else number = Number(token);
+    }
+    if (!Number.isFinite(number) || number <= 0) return null;
+    return unit ? inchesFrom(`${number} ${unit}`) : inchesFrom(number);
+  }
+
+  function sizeFromText(text) {
+    const match = SIZE_TRIPLE.exec(String(text || ""));
+    if (!match) return null;
+    const length = tokenInches(match[1], match[2]);
+    const width = tokenInches(match[3], match[4]);
+    const height = tokenInches(match[5], match[6]);
+    if (!(length > 0 && width > 0 && height > 0)) return null;
+    return { length: round(length), width: round(width), height: round(height) };
+  }
+
   const root = typeof globalThis !== "undefined" ? globalThis : window;
-  root.drawgenInventor = { read, inchesFrom };
+  root.drawgenInventor = { read, inchesFrom, sizeFromText };
 })();

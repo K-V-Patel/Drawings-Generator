@@ -301,6 +301,33 @@
     return !!(view && (view.paths || view.circles || view.arcs || view.hatch));
   }
 
+  function describedOverall(props, overall) {
+    const size = { ...(overall || {}) };
+    const inventor = typeof globalThis !== "undefined" ? globalThis.drawgenInventor : null;
+    if (!inventor || !inventor.sizeFromText) return size;
+    if (["length", "width", "height"].every((key) => Number(size[key]) > 0)) return size;
+    const text = [props.description, props.title, props.subject, props.comments].filter(Boolean).join(" ");
+    const found = inventor.sizeFromText(text);
+    if (!found) return size;
+    ["length", "width", "height"].forEach((key) => {
+      if (!(Number(size[key]) > 0)) size[key] = found[key];
+    });
+    if (!props.thickness) props.thickness = String(Math.round(found.height * 10000) / 10000);
+    return size;
+  }
+
+  function applyDescribedSize(job) {
+    const model = job.model || {};
+    const props = job.properties || {};
+    const before = JSON.stringify(model.overall || {});
+    const overall = describedOverall(props, model.overall || {});
+    const changed = JSON.stringify(overall) !== before || (props.thickness && !(job.properties || {}).thickness);
+    model.overall = overall;
+    job.model = model;
+    job.properties = props;
+    return ["length", "width", "height"].every((key) => Number(overall[key]) > 0) && (changed || before === "{}");
+  }
+
   function drawable(job) {
     const overall = (job.model && job.model.overall) || {};
     const sized = ["length", "width", "height"].every((key) => num(overall[key]) > 0);
@@ -466,6 +493,7 @@
       props.partNumber = filename.replace(/\.[^.]+$/, "");
       warnings.push("Part number was taken from the file name.");
     }
+    overall = describedOverall(props, overall);
     const sized = ["length", "width", "height"].every((key) => Number(overall[key]) > 0);
     if (!sized) overall = {};
     if (sized) warnings.push("Overall size, part number, and material were read from the file. Views show that envelope.");
@@ -1296,6 +1324,7 @@
     if (bits[1] === "jobs" && bits[3] === "generate" && method === "POST") {
       const job = jobById(bits[2]);
       if ((job.selectedViews || []).length < 2) throw new Error("Ask for at least 2 views before generating the sheet.");
+      applyDescribedSize(job);
       if (!drawable(job)) throw new Error("This file has no profiles and no overall size.");
       const item = effective(templateById(job.templateId), job);
       const fmt = formatById(job.bomFormatId);

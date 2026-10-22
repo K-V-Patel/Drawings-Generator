@@ -292,6 +292,46 @@ def test_flat_pattern_extents_fill_a_missing_custom_size():
     assert incomplete == {}
 
 
+def test_description_supplies_the_overall_size(client):
+    from app.inventor_file import size_from_text
+
+    text = "Solid Square Cover Plate - End cover on the outrigger - 3.75 x 3.75 x 1/4. Corner 0.5rad"
+    found = size_from_text(text)
+    assert found["length"] == pytest.approx(3.75)
+    assert found["width"] == pytest.approx(3.75)
+    assert found["height"] == pytest.approx(0.25)
+    assert size_from_text("Corner 0.5rad") == {}
+    assert size_from_text("1-1/2 x 2 x 1/8") == {
+        "length": pytest.approx(1.5),
+        "width": pytest.approx(2),
+        "height": pytest.approx(0.125),
+    }
+    payload = "Description".encode("utf-16le") + b"\x00\x00" + text.encode("utf-16le")
+    uploaded = client.post("/api/jobs", files={"file": ("T12454.ipt", payload, "application/octet-stream")})
+    assert uploaded.status_code == 200, uploaded.text
+    job = uploaded.json()
+    assert job["properties"]["partNumber"] == "T12454"
+    assert job["properties"]["description"].startswith("Solid Square Cover Plate")
+    assert job["model"]["overall"]["length"] == pytest.approx(3.75)
+    assert job["model"]["overall"]["width"] == pytest.approx(3.75)
+    assert job["model"]["overall"]["height"] == pytest.approx(0.25)
+    assert float(job["properties"]["thickness"]) == pytest.approx(0.25)
+    saved = client.post("/api/jobs", json={
+        "fileName": "T12454.ipt",
+        "fileKind": "ipt",
+        "properties": {"partNumber": "T12454", "description": text},
+        "model": {"kind": "part", "overall": {}, "views": {}},
+    })
+    assert saved.status_code == 200, saved.text
+    generated = client.post(f"/api/jobs/{saved.json()['id']}/generate")
+    assert generated.status_code == 200, generated.text
+    assert generated.json()["model"]["overall"]["height"] == pytest.approx(0.25)
+    svg = client.get(f"/api/jobs/{saved.json()['id']}/sheet.svg").text
+    assert "T12454" in svg
+    assert "ENVELOPE" in svg
+    assert "3.750" in svg or "3.75" in svg
+
+
 def test_browser_reader_matches_the_sample_part():
     script = r"""
 const fs = require("fs");
@@ -321,6 +361,56 @@ console.log(JSON.stringify({
     assert payload["overall"]["length"] == pytest.approx(24)
     assert payload["overall"]["width"] == pytest.approx(36)
     assert payload["overall"]["height"] == pytest.approx(12)
+
+
+def test_browser_uses_the_description_size():
+    script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const context = {
+  console, TextDecoder, TextEncoder, URL, Blob,
+  crypto: require("crypto").webcrypto,
+};
+context.globalThis = context;
+context.window = context;
+vm.createContext(context);
+vm.runInContext(fs.readFileSync("static/inventor.js", "utf8"), context);
+vm.runInContext(fs.readFileSync("static/browser.js", "utf8"), context);
+const description = "Solid Square Cover Plate - End cover on the outrigger - 3.75 x 3.75 x 1/4. Corner 0.5rad";
+const found = context.drawgenInventor.sizeFromText(description);
+context.drawgenBrowser.handle("api/jobs", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    fileName: "T12454.ipt",
+    fileKind: "ipt",
+    properties: { partNumber: "T12454", description },
+    model: { kind: "part", overall: {}, views: {} },
+  }),
+}).then((job) => context.drawgenBrowser.handle("api/jobs/" + job.id + "/generate", { method: "POST" }))
+  .then((sheet) => {
+    console.log(JSON.stringify({
+      length: found.length,
+      width: found.width,
+      height: found.height,
+      overall: sheet.model.overall,
+      thickness: sheet.properties.thickness,
+      partNumber: sheet.properties.partNumber,
+    }));
+  }).catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+"""
+    completed = subprocess.run(["node", "-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
+    payload = json.loads(completed.stdout)
+    assert payload["length"] == pytest.approx(3.75)
+    assert payload["width"] == pytest.approx(3.75)
+    assert payload["height"] == pytest.approx(0.25)
+    assert payload["overall"]["length"] == pytest.approx(3.75)
+    assert payload["overall"]["height"] == pytest.approx(0.25)
+    assert float(payload["thickness"]) == pytest.approx(0.25)
+    assert payload["partNumber"] == "T12454"
 
 
 def test_extra_templates_are_refused(client):

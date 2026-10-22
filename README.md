@@ -55,7 +55,7 @@ A file with no profiles and no saved overall size does not generate a sheet.
 
 ## Inventor file
 
-Dropping the `.ipt` or `.iam` reads the part number, description, material, and exported length, width, height, and thickness. Sheet-metal flat extents are used when those parameters were not exported. The views are the envelope of that size. No part parameter is typed in.
+Dropping the `.ipt` or `.iam` reads the part number, description, material, and exported length, width, height, and thickness. Sheet-metal flat extents are used when those parameters were not exported. A description written as length x width x thickness, such as `3.75 x 3.75 x 1/4`, supplies the size when the file has no exported envelope. The views are the envelope of that size. No part parameter is typed in.
 
 Profile curves, bend lines, and a structured assembly BOM are still written by `tools/ExportDrawgen.vb`. Run it as an iLogic rule inside Inventor. It writes a `.drawgen.json` beside the model. Drop that file for a sheet that carries the real bend table and parts list. The envelope is labeled so it is not mistaken for a finished profile.
 

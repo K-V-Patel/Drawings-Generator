@@ -11,7 +11,7 @@ import io
 import json
 import zipfile
 
-from app.inventor_file import read_inventor_file
+from app.inventor_file import apply_described_size, read_inventor_file
 
 _SCHEMA_MARKERS = (
     "internalname",
@@ -109,6 +109,7 @@ def from_inventor(filename: str, data: bytes, kind: str) -> dict:
         props["partNumber"] = stem
         warnings.append("Part number was taken from the file name.")
     description = props.get("description") or props.get("subject") or props.get("title") or ""
+    props, overall, _described = apply_described_size(props, overall)
     sized = all(float(overall.get(key) or 0) > 0 for key in ("length", "width", "height"))
     if not sized:
         overall = {}

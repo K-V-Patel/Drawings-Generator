@@ -101,6 +101,11 @@ async function boot() {
       [state.job, state.templates, state.formats, state.templateSource] = await Promise.all([
         api(`/api/jobs/${id}`), api("/api/templates"), api("/api/bom-formats"), api("/api/template-source"),
       ]);
+      if (!state.job.hasSheet && (hasOverall(state.job) || describedSize(state.job))) {
+        await api(`/api/jobs/${id}/generate`, { method: "POST" });
+        location.hash = `#/sheet/${id}`;
+        return;
+      }
       renderJob();
     } else if (name === "sheet" && id) {
       state.job = await api(`/api/jobs/${id}`);
@@ -169,6 +174,19 @@ async function upload(file) {
   } catch (error) {
     flash(error);
   }
+}
+
+function hasOverall(job) {
+  const overall = (job.model && job.model.overall) || {};
+  return ["length", "width", "height"].every((key) => Number(overall[key]) > 0);
+}
+
+function describedSize(job) {
+  const props = (job && job.properties) || {};
+  const reader = window.drawgenInventor;
+  if (!reader || !reader.sizeFromText) return null;
+  const text = [props.description, props.title, props.subject, props.comments].filter(Boolean).join(" ");
+  return reader.sizeFromText(text);
 }
 
 function currentTemplate() {
