@@ -4,9 +4,9 @@ Shop-floor app for production drawings of Inventor parts (`.ipt`) and assemblies
 
 ## Open it
 
-https://proprietary-piece-deny-calculated.trycloudflare.com
+https://github.com/K-V-Patel/Drawings-Generator
 
-That address is a temporary tunnel to the copy of this app running with the project. It stays up while that machine is on. There is no sign-in, so the link is unlisted rather than private. The same app on this machine is at http://localhost:8000.
+That is the project on GitHub. To run the app, use the steps below and open http://localhost:8000.
 
 The flow matches the drawing note:
 
@@ -27,7 +27,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --port 8000
 ```
 
-Open https://proprietary-piece-deny-calculated.trycloudflare.com, or `http://localhost:8000` on this machine.
+Open http://localhost:8000. The project on GitHub is https://github.com/K-V-Patel/Drawings-Generator.
 
 ## How a sheet is built
 
