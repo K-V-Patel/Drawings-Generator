@@ -2,6 +2,12 @@
 
 Shop-floor app for production drawings of Inventor parts (`.ipt`) and assemblies (`.iam`).
 
+## Open it
+
+https://proprietary-piece-deny-calculated.trycloudflare.com
+
+That address is a temporary tunnel to the copy of this app running with the project. It stays up while that machine is on. There is no sign-in, so the link is unlisted rather than private. The same app on this machine is at http://localhost:8000.
+
 The flow matches the drawing note:
 
 1. Drop an `.ipt` or an `.iam`.
@@ -21,7 +27,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --port 8000
 ```
 
-Open `http://localhost:8000`.
+Open https://proprietary-piece-deny-calculated.trycloudflare.com, or `http://localhost:8000` on this machine.
 
 ## Worked examples
 

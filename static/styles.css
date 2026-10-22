@@ -59,6 +59,14 @@ nav a {
   border-bottom: 2px solid transparent;
 }
 nav a.active { color: var(--ink); border-bottom-color: var(--accent); }
+nav a.share {
+  margin-left: 10px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  padding: 6px 10px;
+  font-size: 13px;
+}
+nav a.share.active { border-bottom-color: var(--accent); }
 
 main { padding: 28px; max-width: 1280px; margin: 0 auto; }
 main.wide { max-width: none; }
