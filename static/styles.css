@@ -88,6 +88,17 @@ h2 { font-size: 16px; font-weight: 600; margin: 0 0 8px; }
   padding: 28px;
 }
 .drop.hot { border-color: var(--accent); background: var(--accent-soft); }
+.drop.compact { min-height: 120px; margin-bottom: 16px; }
+.source-banner {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 12px 14px;
+  margin: 0 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.source-banner .path { font-size: 13px; color: var(--ink); word-break: break-all; }
 .drop strong { font-size: 18px; }
 .drop span { color: var(--muted); }
 .file-btn { margin-top: 8px; }
@@ -186,6 +197,7 @@ table.data input:focus { outline: 1px solid var(--accent); background: var(--pan
 
 .banner { padding: 10px 12px; margin-bottom: 12px; }
 .banner.warn { background: var(--warn-soft); }
+.banner.ok { background: var(--ok-soft); }
 .banner.fail { background: var(--fail-soft); }
 .banner p { margin: 0 0 4px; }
 .banner p:last-child { margin: 0; }

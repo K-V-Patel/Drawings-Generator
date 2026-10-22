@@ -3,6 +3,7 @@ const state = {
   templates: [],
   formats: [],
   examples: [],
+  templateSource: null,
   jobs: [],
   job: null,
   showAllTemplates: false,
@@ -73,11 +74,13 @@ async function boot() {
   const { name, id } = route();
   try {
     if (name === "new") {
-      state.examples = await api("/api/examples");
+      [state.examples, state.templateSource] = await Promise.all([
+        api("/api/examples"), api("/api/template-source"),
+      ]);
       renderNew();
     } else if (name === "job" && id) {
-      [state.job, state.templates, state.formats] = await Promise.all([
-        api(`/api/jobs/${id}`), api("/api/templates"), api("/api/bom-formats"),
+      [state.job, state.templates, state.formats, state.templateSource] = await Promise.all([
+        api(`/api/jobs/${id}`), api("/api/templates"), api("/api/bom-formats"), api("/api/template-source"),
       ]);
       renderJob();
     } else if (name === "sheet" && id) {
@@ -87,7 +90,9 @@ async function boot() {
       state.jobs = await api("/api/jobs");
       renderLibrary();
     } else if (name === "templates") {
-      state.templates = await api("/api/templates");
+      [state.templates, state.templateSource] = await Promise.all([
+        api("/api/templates"), api("/api/template-source"),
+      ]);
       renderTemplates(id || (state.templates[0] && state.templates[0].id));
     } else if (name === "formats") {
       state.formats = await api("/api/bom-formats");
@@ -129,6 +134,7 @@ function renderNew() {
     ${errorBlock()}
     <h1>New drawing</h1>
     <p class="lede">Drop a part (.ipt) or an assembly (.iam). Pick a drawing template, say how many views are needed (at least two), and generate the sheet. An assembly builds a BOM in the saved format as soon as the file is in.</p>
+    ${templateSourceNote()}
     <div class="drop" id="drop">
       <strong>Drop an .ipt or an .iam</strong>
       <span>JSON exports from the Inventor rule and zip bundles work too.</span>
@@ -183,12 +189,12 @@ function renderJob() {
   document.querySelector("main").classList.remove("wide");
   const job = state.job;
   const template = currentTemplate();
-  const visible = state.templates.filter((item) => state.showAllTemplates || item.appliesTo === job.sourceKind);
+  const visible = state.templates.filter((item) => state.showAllTemplates || item.appliesTo === job.sourceKind || item.appliesTo === "both");
   const choices = (visible.length ? visible : state.templates).map((item) => `
     <label class="choice ${item.id === job.templateId ? "on" : ""}">
       <input type="radio" name="template" value="${esc(item.id)}" ${item.id === job.templateId ? "checked" : ""}>
-      <span><strong>${esc(item.name)}</strong><br><span class="muted">${esc(item.drawingType)} · sheet ${esc(item.sheetLabel)} · ${item.sheetWidthIn} × ${item.sheetHeightIn} in</span></span>
-      <span class="tag">${esc(item.appliesTo)}</span>
+      <span><strong>${esc(item.name)}</strong><br><span class="muted">${esc(templateMeta(item))}</span></span>
+      <span class="tag">${esc(appliesLabel(item.appliesTo))}</span>
     </label>`).join("");
   const order = (template.views || []);
   const selected = new Set(job.selectedViews || []);
@@ -209,6 +215,7 @@ function renderJob() {
       <div class="stack">
         <section class="panel">
           <h2>Drawing template</h2>
+          ${templateSourceNote()}
           <div class="choices">${choices}</div>
           <label class="field" style="margin-top:10px"><span></span>
             <span><input type="checkbox" id="showAll" ${state.showAllTemplates ? "checked" : ""}> Show every template</span>
@@ -537,18 +544,45 @@ function statusLabel(status) {
   return "Setup";
 }
 
+function templateSourceNote() {
+  const source = state.templateSource;
+  if (!source) return "";
+  const detail = source.reachable
+    ? `This machine can read that folder (${source.drawings.length} drawing template${source.drawings.length === 1 ? "" : "s"}).`
+    : "This copy of the app cannot open that Windows folder. Run tools/ExportTemplates.vb in Inventor and drop drawgen-templates.json here, or zip the folder and drop it.";
+  return `<div class="source-banner"><strong>Inventor 2025 drawing templates</strong><span class="path">${esc(source.path)}</span><span>${esc(detail)}</span></div>`;
+}
+
+function templateMeta(item) {
+  const file = item.source && item.source.relativePath ? `${item.source.relativePath} · ` : "";
+  return `${file}${item.drawingType} · sheet ${item.sheetLabel} · ${item.sheetWidthIn} × ${item.sheetHeightIn} in`;
+}
+
+function appliesLabel(value) {
+  if (value === "both") return "ipt · iam";
+  return value;
+}
+
 function renderTemplates(id) {
   document.querySelector("main").classList.remove("wide");
   const template = state.templates.find((item) => item.id === id) || state.templates[0];
+  const source = state.templateSource || {};
   const list = state.templates.map((item) => `
     <button class="list-row ${item.id === template.id ? "on" : ""}" data-id="${esc(item.id)}">
       <strong>${esc(item.name)}</strong>
-      <span class="muted">${esc(item.drawingType)} · ${esc(item.sheetLabel)} · .${esc(item.appliesTo)}</span>
+      <span class="muted">${esc(templateMeta(item))}</span>
     </button>`).join("");
   app.innerHTML = `
     ${errorBlock()}
     <h1>Drawing templates</h1>
-    <p class="lede">Templates live in this app. Change the title block, the view list, the sheet size, or the bend table, and the next sheet uses it.</p>
+    <p class="lede">The shop borders are the .idw and .dwg files in the Inventor template folder. Title block, views, sheet size, and the bend table stay editable here. The next sheet uses the saved copy.</p>
+    ${templateSourceNote()}
+    <div class="drop compact" id="templateDrop">
+      <strong>Drop the template list</strong>
+      <span>.json from ExportTemplates.vb, a zip of that folder, or the .idw / .dwg files.</span>
+      <label class="file-btn">Browse<input id="templateFile" type="file" accept=".json,.zip,.idw,.dwg" multiple hidden></label>
+    </div>
+    ${source.reachable ? `<p><button class="btn" id="syncTemplates" type="button">Read the folder again</button></p>` : ""}
     <div class="split">
       <div>
         ${list}
@@ -556,6 +590,29 @@ function renderTemplates(id) {
       </div>
       <form class="editor" id="templateForm" data-template-id="${esc(template.id)}">${templateEditor(template)}</form>
     </div>`;
+  const templateDrop = document.getElementById("templateDrop");
+  templateDrop.addEventListener("dragover", (event) => { event.preventDefault(); templateDrop.classList.add("hot"); });
+  templateDrop.addEventListener("dragleave", () => templateDrop.classList.remove("hot"));
+  templateDrop.addEventListener("drop", (event) => {
+    event.preventDefault();
+    if (event.dataTransfer.files.length) importTemplateFiles(event.dataTransfer.files);
+  });
+  document.getElementById("templateFile").addEventListener("change", (event) => {
+    if (event.target.files.length) importTemplateFiles(event.target.files);
+  });
+  const syncTemplates = document.getElementById("syncTemplates");
+  if (syncTemplates) {
+    syncTemplates.addEventListener("click", async () => {
+      try {
+        const result = await api("/api/template-source/sync", { method: "POST" });
+        state.templates = result.templates;
+        state.templateSource = result.source;
+        renderTemplates(template.id);
+      } catch (error) {
+        flash(error);
+      }
+    });
+  }
   app.querySelectorAll(".list-row").forEach((button) => {
     button.addEventListener("click", () => { location.hash = `#/templates/${button.dataset.id}`; });
   });
@@ -573,6 +630,23 @@ function renderTemplates(id) {
   bindRemove();
 }
 
+async function importTemplateFiles(fileList) {
+  const body = new FormData();
+  [...fileList].forEach((file) => body.append("file", file));
+  try {
+    const result = await api("/api/templates/import", { method: "POST", body });
+    state.templates = result.templates;
+    state.templateSource = result.source;
+    const note = `Added ${result.imported}, updated ${result.updated}.`;
+    state.error = "";
+    renderTemplates();
+    const banner = document.querySelector(".source-banner");
+    if (banner) banner.insertAdjacentHTML("afterend", `<div class="banner ok"><p>${esc(note)}</p></div>`);
+  } catch (error) {
+    flash(error);
+  }
+}
+
 function templateEditor(template) {
   const company = template.company || {};
   const tolerances = (company.tolerances || []).join("\n");
@@ -580,16 +654,26 @@ function templateEditor(template) {
   const bend = template.table && template.table.kind === "bend";
   const columns = bend ? (template.table.columns || []).map((col) => columnRow({ ...col, width: Math.round((col.width || 0) * 100) })).join("") : "";
   const fields = (template.signoffFields || []).map(fieldRow).join("");
+  const sheetLabels = ["A", "B", "C", "D", "E"];
+  if (template.sheetLabel && !sheetLabels.includes(template.sheetLabel)) sheetLabels.push(template.sheetLabel);
+  const source = template.source && template.source.fileName
+    ? `<p class="notes">File ${esc(template.source.folder)}\\${esc(template.source.relativePath || template.source.fileName)}${template.source.titleBlock ? ` · title block ${esc(template.source.titleBlock)}` : ""}${template.source.sheetSizeRead ? "" : " · sheet size not read from Inventor"}</p>`
+    : "";
   return `
+    ${source}
     <div class="grid-2">
       <label class="field">Name<input name="name" value="${esc(template.name)}"></label>
       <label class="field">Drawing type
         <select name="drawingType">${["part", "weldment", "assembly", "signoff"].map((item) => `<option ${item === template.drawingType ? "selected" : ""}>${item}</option>`).join("")}</select>
       </label>
       <label class="field">Applies to
-        <select name="appliesTo"><option value="ipt" ${template.appliesTo === "ipt" ? "selected" : ""}>.ipt part</option><option value="iam" ${template.appliesTo === "iam" ? "selected" : ""}>.iam assembly</option></select>
+        <select name="appliesTo">
+          <option value="ipt" ${template.appliesTo === "ipt" ? "selected" : ""}>.ipt part</option>
+          <option value="iam" ${template.appliesTo === "iam" ? "selected" : ""}>.iam assembly</option>
+          <option value="both" ${template.appliesTo === "both" ? "selected" : ""}>.ipt and .iam</option>
+        </select>
       </label>
-      <label class="field">Sheet<select name="sheetLabel" id="sheetLabel">${["A", "B", "C", "D", "E"].map((item) => `<option ${item === template.sheetLabel ? "selected" : ""}>${item}</option>`).join("")}</select></label>
+      <label class="field">Sheet<select name="sheetLabel" id="sheetLabel">${sheetLabels.map((item) => `<option ${item === template.sheetLabel ? "selected" : ""}>${item}</option>`).join("")}</select></label>
       <label class="field">Width, in<input name="sheetWidthIn" id="sheetWidth" value="${esc(template.sheetWidthIn)}"></label>
       <label class="field">Height, in<input name="sheetHeightIn" id="sheetHeight" value="${esc(template.sheetHeightIn)}"></label>
       <label class="field">Company<input name="companyName" value="${esc(company.name || "")}"></label>

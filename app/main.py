@@ -15,6 +15,7 @@ from app.db import connect, dumps, init_db, loads
 from app.drawing.compose import compose
 from app.drawing.export import to_dxf, to_pdf, to_svg
 from app.examples_lib import all_examples, example_by_id
+from app.inventor_templates import import_uploads, source_status, sync_if_reachable
 from app.parser import from_drawgen, parse_upload
 from app.seed import BEND_COLUMNS, seed_if_empty
 from app.sop import review
@@ -41,6 +42,7 @@ def new_id() -> str:
 async def lifespan(_app: FastAPI):
     init_db()
     seed_if_empty()
+    sync_if_reachable()
     yield
 
 
@@ -68,6 +70,7 @@ def _template_from_row(row) -> dict:
         "table": body.get("table") or {"kind": "none"},
         "signoffFields": body.get("signoff_fields") or [],
         "sopNotes": body.get("sop_notes") or "",
+        "source": body.get("source") or None,
         "updatedAt": row["updated_at"],
     }
 
@@ -275,6 +278,45 @@ def health():
     return {"ok": True}
 
 
+@app.get("/api/template-source")
+def template_source():
+    return source_status()
+
+
+@app.post("/api/template-source/sync")
+def template_source_sync():
+    status = source_status()
+    if not status["reachable"]:
+        raise ValueError(
+            "This machine cannot open "
+            + status["path"]
+            + ". Run tools/ExportTemplates.vb in Inventor and drop the JSON here, or zip that folder and drop it."
+        )
+    result = sync_if_reachable() or {"imported": 0, "updated": 0, "skipped": []}
+    result["templates"] = _templates()
+    result["source"] = source_status()
+    return result
+
+
+@app.post("/api/templates/import")
+async def import_template_files(request: Request):
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" not in content_type:
+        raise ValueError("Drop a template list (.json), a zip of the template folder, or an .idw / .dwg file.")
+    form = await request.form()
+    uploads = form.getlist("file")
+    files = []
+    for upload in uploads:
+        if upload is None or not getattr(upload, "filename", None):
+            continue
+        data = await upload.read()
+        files.append((upload.filename, data))
+    result = import_uploads(files)
+    result["templates"] = _templates()
+    result["source"] = source_status()
+    return result
+
+
 @app.get("/api/templates")
 def list_templates():
     return _templates()
@@ -299,6 +341,7 @@ async def update_template(template_id: str, request: Request):
 def duplicate_template(template_id: str):
     current = _load_template(template_id)
     current["name"] = f"{current['name']} copy"
+    current["source"] = None
     template_id = new_id()
     return _write_template(template_id, current, now())
 
@@ -559,8 +602,8 @@ def _validate_template(template: dict) -> None:
         raise ValueError("Give the template a name.")
     if template.get("drawingType") not in {"part", "weldment", "assembly", "signoff"}:
         raise ValueError("Drawing type must be part, weldment, assembly, or signoff.")
-    if template.get("appliesTo") not in {"ipt", "iam"}:
-        raise ValueError("A template applies to .ipt parts or .iam assemblies.")
+    if template.get("appliesTo") not in {"ipt", "iam", "both"}:
+        raise ValueError("A template applies to .ipt parts, .iam assemblies, or both.")
     views = template.get("views") or []
     if len(views) < 2:
         raise ValueError("A template needs at least two views.")
@@ -591,6 +634,7 @@ def _write_template(template_id: str, template: dict, timestamp: str) -> dict:
         "table": template.get("table") or {"kind": "none"},
         "signoff_fields": template.get("signoffFields") or [],
         "sop_notes": template.get("sopNotes") or "",
+        "source": template.get("source") or None,
     }
     with connect() as conn:
         conn.execute(

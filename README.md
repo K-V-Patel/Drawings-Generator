@@ -11,7 +11,7 @@ That address is a temporary tunnel to the copy of this app running with the proj
 The flow matches the drawing note:
 
 1. Drop an `.ipt` or an `.iam`.
-2. Pick a drawing template. Templates are stored in the app and can be edited.
+2. Pick a drawing template. The shop borders are the `.idw` and `.dwg` files in `C:\Users\Public\Documents\Autodesk\Inventor 2025\Templates\en-US`. They are stored in the app and can be edited.
 3. For an assembly, the BOM is built immediately in the saved column format. Edit the cells before the sheet is issued.
 4. Say how many views are needed. The minimum is 2.
 5. Generate the sheet. Download PDF, DXF, or SVG.
@@ -40,6 +40,16 @@ Meridian sheets are sample jobs in that same pattern, standing in for `T:\Engine
 Profiles, bend lines, and the assembly tree are not stored in a form this app can rebuild from the `.ipt` / `.iam` alone. The app reads summary properties and any property names it can see, then dimensions an overall envelope.
 
 Run `tools/ExportDrawgen.vb` as an iLogic rule inside Inventor. It writes a `.drawgen.json` beside the model (overall size, iProperties, sheet-metal bends, structured BOM). Drop that file here for a sheet that carries the real BOM and bend table. View curves still need the model; the envelope is labeled so it is not mistaken for a finished profile.
+
+## Drawing templates
+
+Inventor drawing templates live in:
+
+`C:\Users\Public\Documents\Autodesk\Inventor 2025\Templates\en-US`
+
+That is the English template folder (Standard.idw, Standard.dwg, and any company borders saved there). Subfolders are the tabs in Inventor's New dialog. This app cannot see that Windows folder from the machine it is running on.
+
+Run `tools/ExportTemplates.vb` as an iLogic rule. It opens each `.idw` and `.dwg`, reads the sheet size, title block, and border, and writes `drawgen-templates.json` on the Desktop. Drop that file on the Templates page. A zip of the folder works too; without Inventor the file names come in and the sheet size stays ANSI B until the JSON replaces it. Re-importing updates the sheet size and leaves a drawing type you already changed.
 
 ## What is stored
 
