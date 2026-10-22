@@ -14,7 +14,7 @@ Open that link to use the app. It is published with GitHub Pages from the `main`
 2. Settings → Pages → Source: `main` / root.
 3. Live at https://k-v-patel.github.io/Drawings-Generator/ within a minute or two.
 
-Sheets opened from that link stay in the browser. The shop computer can still run the Python app below; that copy keeps a database on disk.
+Open that address in a browser. The app loads there. No local server is required.
 
 The flow matches the drawing note:
 
@@ -26,21 +26,21 @@ The flow matches the drawing note:
 
 Part, weldment, assembly, and signoff sheets follow *What To Include On A Drawing SOP*: overall size, thickness, bend table (direction up), weld symbols, a top-left parts list with balloons, and the signoff block (customer, order, quote, signature, date, plus the unit lines).
 
-## Run
+## Open
+
+https://k-v-patel.github.io/Drawings-Generator/
+
+The project on GitHub is https://github.com/K-V-Patel/Drawings-Generator.
+
+## Saved database (optional)
+
+A shop computer can keep templates and issued sheets on disk. The public page does not need this.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --port 8000
-```
-
-Open http://localhost:8000. The public page is https://k-v-patel.github.io/Drawings-Generator/. The project on GitHub is https://github.com/K-V-Patel/Drawings-Generator.
-
-The same page also opens with no install:
-
-```bash
-python3 -m http.server 8000
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 ## How a sheet is built
