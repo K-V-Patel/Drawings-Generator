@@ -1,8 +1,8 @@
 """Read what an Inventor file will give up without Inventor.
 
-.ipt and .iam files are OLE compound documents. Summary properties and any
-UTF-16 property names are copied onto the job. Profile geometry, bends, and
-the assembly tree come from a drawgen.json written by tools/ExportDrawgen.vb.
+.ipt and .iam files are OLE compound documents. Part number, description,
+material, thickness, and overall size are read from the property sets.
+Profile curves still come from a drawgen.json written by tools/ExportDrawgen.vb.
 """
 
 from __future__ import annotations
@@ -10,6 +10,8 @@ from __future__ import annotations
 import io
 import json
 import zipfile
+
+from app.inventor_file import read_inventor_file
 
 _SCHEMA_MARKERS = (
     "internalname",
@@ -87,29 +89,47 @@ def parse_upload(filename: str, data: bytes) -> dict:
 def from_inventor(filename: str, data: bytes, kind: str) -> dict:
     warnings: list[str] = []
     props: dict[str, str] = {}
+    overall: dict = {}
+    bom_rows: list[dict] = []
+    read = {"ok": False}
     if data[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
-        props.update(_ole_summary(data, warnings))
+        read = read_inventor_file(data, filename, kind)
+        props.update(read.get("properties") or {})
+        overall = dict(read.get("overall") or {})
+        bom_rows = list(read.get("bomRows") or [])
+        if not read.get("ok"):
+            props.update(_ole_summary(data, warnings))
     else:
         warnings.append("This file is not an OLE compound document. Inventor parts and assemblies usually are.")
-    scraped = _scrape_properties(data)
-    for key, value in scraped.items():
-        props.setdefault(key, value)
+    if not read.get("ok"):
+        for key, value in _scrape_properties(data).items():
+            props.setdefault(key, value)
     if not props.get("partNumber"):
         stem = filename.rsplit(".", 1)[0]
         props["partNumber"] = stem
-        warnings.append("Part number was taken from the file name. Confirm it in the title block.")
+        warnings.append("Part number was taken from the file name.")
     description = props.get("description") or props.get("subject") or props.get("title") or ""
+    sized = all(float(overall.get(key) or 0) > 0 for key in ("length", "width", "height"))
+    if not sized:
+        overall = {}
+        warnings.append("This file has no saved overall size. A sheet is not generated.")
+    else:
+        warnings.append("Overall size, part number, and material were read from the file. Views show that envelope.")
     model_kind = "part" if kind == "ipt" else "assembly"
-    warnings.append(
-        "Inventor did not embed the profiles or the assembly tree. "
-        "Enter the overall size, bends, and BOM here, or drop the drawgen.json from ExportDrawgen.vb."
-    )
     return {
         "fileName": filename,
         "fileKind": kind,
         "properties": _clean_props(props, description),
-        "model": {"kind": model_kind, "overall": {}, "bends": [], "welds": [], "components": [], "views": {}, "sections": []},
-        "bomRows": [],
+        "model": {
+            "kind": model_kind,
+            "overall": overall,
+            "bends": [],
+            "welds": [],
+            "components": list(bom_rows),
+            "views": {},
+            "sections": [],
+        },
+        "bomRows": bom_rows,
         "warnings": warnings,
         "sample": False,
         "sampleNote": "",

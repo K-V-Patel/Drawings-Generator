@@ -519,7 +519,7 @@ def generate_job(job_id: str):
         raise ValueError("Ask for at least 2 views before generating the sheet.")
     if not _drawable(job):
         raise ValueError(
-            "This file has no profiles and no overall size. Enter length, width, and height, or drop the drawgen.json from Inventor, before generating the sheet."
+            "This file has no profiles and no overall size."
         )
     template = _effective_template(_load_template(job["templateId"]), job)
     fmt = _load_format(job["bomFormatId"])

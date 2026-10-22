@@ -152,6 +152,9 @@ textarea { min-height: 88px; resize: vertical; }
 .choice.on { border-color: var(--accent); background: var(--accent-soft); }
 .choice input { accent-color: var(--accent); }
 .notes { color: var(--muted); font-size: 13px; margin: 10px 0 0; }
+.facts { display: grid; grid-template-columns: 9rem 1fr; gap: 6px 12px; margin: 0; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; }
 
 .views { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .stepper { display: flex; align-items: center; gap: 8px; }

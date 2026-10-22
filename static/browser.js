@@ -443,20 +443,48 @@
     const warnings = [];
     const bytes = new Uint8Array(data);
     const ole = bytes.length >= 8 && bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0;
+    const props = {};
+    let overall = {};
+    let bomRows = [];
+    let parsed = false;
     if (!ole) warnings.push("This file is not an OLE compound document. Inventor parts and assemblies usually are.");
-    const props = scrape(data);
+    const inventor = typeof globalThis !== "undefined" ? globalThis.drawgenInventor : null;
+    if (ole && inventor) {
+      const read = inventor.read(bytes, filename, kind);
+      parsed = !!(read && read.ok);
+      Object.assign(props, (read && read.properties) || {});
+      overall = (read && read.overall) || {};
+      bomRows = (read && read.bomRows) || [];
+    }
+    if (!parsed) {
+      const scraped = scrape(data);
+      Object.keys(scraped).forEach((key) => {
+        if (!props[key]) props[key] = scraped[key];
+      });
+    }
     if (!props.partNumber) {
       props.partNumber = filename.replace(/\.[^.]+$/, "");
-      warnings.push("Part number was taken from the file name. Confirm it in the title block.");
+      warnings.push("Part number was taken from the file name.");
     }
-    warnings.push("Inventor did not embed the profiles or the assembly tree. Enter the overall size, bends, and BOM here, or drop the drawgen.json from ExportDrawgen.vb.");
+    const sized = ["length", "width", "height"].every((key) => Number(overall[key]) > 0);
+    if (!sized) overall = {};
+    if (sized) warnings.push("Overall size, part number, and material were read from the file. Views show that envelope.");
+    else warnings.push("This file has no saved overall size. A sheet is not generated.");
     const description = props.description || props.subject || props.title || "";
     return {
       fileName: filename,
       fileKind: kind,
       properties: cleanProps(props, description),
-      model: { kind: kind === "ipt" ? "part" : "assembly", overall: {}, bends: [], welds: [], components: [], views: {}, sections: [] },
-      bomRows: [],
+      model: {
+        kind: kind === "ipt" ? "part" : "assembly",
+        overall,
+        bends: [],
+        welds: [],
+        components: bomRows.map((row) => ({ ...row })),
+        views: {},
+        sections: [],
+      },
+      bomRows,
       warnings,
       sample: false,
       sampleNote: "",
@@ -1268,7 +1296,7 @@
     if (bits[1] === "jobs" && bits[3] === "generate" && method === "POST") {
       const job = jobById(bits[2]);
       if ((job.selectedViews || []).length < 2) throw new Error("Ask for at least 2 views before generating the sheet.");
-      if (!drawable(job)) throw new Error("This file has no profiles and no overall size. Enter length, width, and height, or drop the drawgen.json from Inventor, before generating the sheet.");
+      if (!drawable(job)) throw new Error("This file has no profiles and no overall size.");
       const item = effective(templateById(job.templateId), job);
       const fmt = formatById(job.bomFormatId);
       const sop = review(effectiveSnake(item), forRules(job));

@@ -1,8 +1,12 @@
 import importlib
 import json
+import subprocess
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture()
@@ -233,11 +237,90 @@ def test_home_page_is_ready_for_github_pages(client):
     assert page.status_code == 200
     html = page.text
     assert 'href="static/styles.css"' in html
+    assert 'src="static/inventor.js"' in html
     assert 'src="static/browser.js"' in html
     assert 'src="static/app.js"' in html
+    assert html.index('src="static/inventor.js"') < html.index('src="static/browser.js"')
     assert "https://k-v-patel.github.io/Drawings-Generator/" in html
     assert 'href="/static/' not in html
     assert 'src="/static/' not in html
+
+
+def test_ipt_parameters_are_read_and_the_sheet_opens(client):
+    data = (ROOT / "tests/fixtures/inventor_sample_file.ipt").read_bytes()
+    response = client.post(
+        "/api/jobs",
+        files={"file": ("inventor_sample_file.ipt", data, "application/octet-stream")},
+    )
+    assert response.status_code == 200, response.text
+    job = response.json()
+    assert job["properties"]["partNumber"] == "box"
+    assert job["properties"]["material"] == "Generic"
+    assert float(job["properties"]["thickness"]) == pytest.approx(0.5)
+    overall = job["model"]["overall"]
+    assert overall["length"] == pytest.approx(24)
+    assert overall["width"] == pytest.approx(36)
+    assert overall["height"] == pytest.approx(12)
+    assert "Enter" not in " ".join(job["warnings"])
+    generated = client.post(f"/api/jobs/{job['id']}/generate")
+    assert generated.status_code == 200, generated.text
+    svg = client.get(f"/api/jobs/{job['id']}/sheet.svg").text
+    assert "box" in svg
+    assert "Generic" in svg
+    assert "ENVELOPE" in svg
+    assert "NO PROFILE" not in svg
+
+
+def test_flat_pattern_extents_fill_a_missing_custom_size():
+    from app.inventor_file import DESIGN_TRACKING, USER_DEFINED, _map_sets, inches_from
+
+    assert inches_from("25.4 mm") == pytest.approx(1)
+    assert inches_from("2.54 cm") == pytest.approx(1)
+    assert inches_from(5) == pytest.approx(5)
+    props, overall = _map_sets([
+        {"fmtid": DESIGN_TRACKING, "props": {5: "PLATE", 63: 25.4, 64: 50.8}, "names": {}},
+        {"fmtid": USER_DEFINED, "props": {3: "0.25 in"}, "names": {3: "thickness"}},
+    ])
+    assert props["partNumber"] == "PLATE"
+    assert props["thickness"] == "0.25"
+    assert overall["length"] == pytest.approx(20)
+    assert overall["width"] == pytest.approx(10)
+    assert overall["height"] == pytest.approx(0.25)
+    _, incomplete = _map_sets([
+        {"fmtid": DESIGN_TRACKING, "props": {63: 25.4, 64: 50.8}, "names": {}},
+    ])
+    assert incomplete == {}
+
+
+def test_browser_reader_matches_the_sample_part():
+    script = r"""
+const fs = require("fs");
+eval(fs.readFileSync("static/inventor.js", "utf8"));
+const data = fs.readFileSync("tests/fixtures/inventor_sample_file.ipt");
+const read = globalThis.drawgenInventor.read(data, "inventor_sample_file.ipt", "ipt");
+console.log(JSON.stringify({
+  partNumber: read.properties.partNumber,
+  material: read.properties.material,
+  thickness: read.properties.thickness,
+  overall: read.overall,
+  ok: read.ok
+}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    assert payload["ok"] is True
+    assert payload["partNumber"] == "box"
+    assert payload["material"] == "Generic"
+    assert float(payload["thickness"]) == pytest.approx(0.5)
+    assert payload["overall"]["length"] == pytest.approx(24)
+    assert payload["overall"]["width"] == pytest.approx(36)
+    assert payload["overall"]["height"] == pytest.approx(12)
 
 
 def test_extra_templates_are_refused(client):

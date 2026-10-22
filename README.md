@@ -19,10 +19,10 @@ Open that address in a browser. The app loads there. No local server is required
 The flow matches the drawing note:
 
 1. Drop an `.ipt` or an `.iam`.
-2. Pick a drawing template. There are three: Standard.idw, Standard.dwg, and Sign off.
-3. For an assembly, the BOM is built immediately in the saved column format. Edit the cells before the sheet is issued.
-4. Say how many views are needed. The minimum is 2.
-5. Generate the sheet. Download PDF, DXF, or SVG.
+2. The sheet opens from the part number, material, thickness, and overall size saved in the file.
+3. Download PDF, DXF, or SVG.
+
+There are three drawing templates: Standard.idw, Standard.dwg, and Sign off. The sheet uses the template that matches the file. Customer, order, and quote on a sign off sheet are not stored in the part file.
 
 Part, weldment, assembly, and signoff sheets follow *What To Include On A Drawing SOP*: overall size, thickness, bend table (direction up), weld symbols, a top-left parts list with balloons, and the signoff block (customer, order, quote, signature, date, plus the unit lines).
 
@@ -51,13 +51,13 @@ Assembly sheets use as many views as production needs, with overall height, widt
 
 Sign off sheets use a side elevation, a front view, an end cross-section, and inlet and discharge faces. Customer, order number, quote number, signature, and date sit in the lower left.
 
-A file with no profiles and no overall size does not generate a sheet. Enter the size, or drop the `.drawgen.json` from Inventor.
+A file with no profiles and no saved overall size does not generate a sheet.
 
-## Inventor export
+## Inventor file
 
-Profiles, bend lines, and the assembly tree are not stored in a form this app can rebuild from the `.ipt` / `.iam` alone. The app reads summary properties and any property names it can see, then dimensions an overall envelope.
+Dropping the `.ipt` or `.iam` reads the part number, description, material, and exported length, width, height, and thickness. Sheet-metal flat extents are used when those parameters were not exported. The views are the envelope of that size. No part parameter is typed in.
 
-Run `tools/ExportDrawgen.vb` as an iLogic rule inside Inventor. It writes a `.drawgen.json` beside the model (overall size, iProperties, sheet-metal bends, structured BOM). Drop that file here for a sheet that carries the real BOM and bend table. View curves still need the model; the envelope is labeled so it is not mistaken for a finished profile.
+Profile curves, bend lines, and a structured assembly BOM are still written by `tools/ExportDrawgen.vb`. Run it as an iLogic rule inside Inventor. It writes a `.drawgen.json` beside the model. Drop that file for a sheet that carries the real bend table and parts list. The envelope is labeled so it is not mistaken for a finished profile.
 
 ## Drawing templates
 

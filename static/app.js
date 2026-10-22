@@ -133,7 +133,7 @@ function renderNew() {
   app.innerHTML = `
     ${errorBlock()}
     <h1>New drawing</h1>
-    <p class="lede">Drop a part (.ipt) or an assembly (.iam). Pick one of the three drawing templates, say how many views are needed (at least two), and generate the sheet. An assembly builds a BOM in the saved format as soon as the file is in.</p>
+    <p class="lede">Drop a part (.ipt) or an assembly (.iam). The sheet is made from the file. Part number, description, material, thickness, and overall size are read automatically.</p>
     ${templateSourceNote()}
     <div class="drop" id="drop">
       <strong>Drop an .ipt or an .iam</strong>
@@ -158,6 +158,13 @@ async function upload(file) {
   body.append("file", file);
   try {
     const job = await api("/api/jobs", { method: "POST", body });
+    const overall = (job.model && job.model.overall) || {};
+    const sized = ["length", "width", "height"].every((key) => Number(overall[key]) > 0);
+    if (sized) {
+      await api(`/api/jobs/${job.id}/generate`, { method: "POST" });
+      location.hash = `#/sheet/${job.id}`;
+      return;
+    }
     location.hash = `#/job/${job.id}`;
   } catch (error) {
     flash(error);
@@ -186,8 +193,6 @@ function renderJob() {
   const props = job.properties || {};
   const overall = (job.model && job.model.overall) || {};
   const sheetKind = sheetKindFor(template, job);
-  const showBends = sheetKind === "part";
-  const showBom = sheetKind === "assembly" || sheetKind === "weldment" || job.sourceKind === "iam";
   const showSignoff = sheetKind === "signoff";
   const warnings = (job.warnings || []).map((line) => `<p>${esc(line)}</p>`).join("");
   app.innerHTML = `
@@ -218,36 +223,14 @@ function renderJob() {
             ${chips}
           </div>
         </section>
-        <section class="panel">
-          <h2>Title block</h2>
-          <div class="grid-2">
-            ${field("Part number", "partNumber", props.partNumber)}
-            ${field("Description", "description", props.description)}
-            ${field("Material", "material", props.material)}
-            ${field("Thickness", "thickness", props.thickness)}
-            ${field("Mass", "mass", props.mass)}
-            ${field("Rev", "rev", props.rev)}
-            ${field("Drawn by", "drawnBy", props.drawnBy)}
-            ${field("Drawn date", "drawnDate", props.drawnDate)}
-            ${field("Designer", "designer", props.designer)}
-            ${field("Designer date", "designerDate", props.designerDate)}
-            ${field("Checker", "checker", props.checker)}
-            ${field("Product series", "productSeries", props.productSeries)}
-          </div>
-          <h2 style="margin-top:16px">Overall size, inches</h2>
-          <div class="grid-3">
-            ${overallField("Length", "length", overall.length)}
-            ${overallField("Width", "width", overall.width)}
-            ${overallField("Height", "height", overall.height)}
-          </div>
-        </section>
+        ${fileFacts(props, overall)}
         ${showSignoff ? signoffPanel(template, props) : ""}
-        ${showBends ? bendPanel(job) : ""}
+        ${bendPanel(job)}
       </div>
       <div class="stack">
-        ${showBom ? bomPanel(job) : ""}
+        ${bomPanel(job)}
         <div class="sticky-actions">
-          <span class="muted">${showBom ? "BOM is in the saved format and can be edited before issue." : "Bend table and title block stay editable."}</span>
+          <span class="muted">${showSignoff ? "Customer, order, and quote are not stored in the part file." : "Part number, material, thickness, and overall size come from the file."}</span>
           <button class="btn primary" type="submit">Generate sheet</button>
         </div>
       </div>
@@ -259,8 +242,27 @@ function field(label, key, value) {
   return `<label class="field">${esc(label)}<input data-prop="${esc(key)}" value="${esc(value ?? "")}"></label>`;
 }
 
-function overallField(label, key, value) {
-  return `<label class="field">${esc(label)}<input data-overall="${esc(key)}" value="${esc(value ?? "")}"></label>`;
+function fileFacts(props, overall) {
+  const sized = ["length", "width", "height"].every((key) => Number(overall[key]) > 0);
+  const size = sized ? `${trimNum(overall.length)} × ${trimNum(overall.width)} × ${trimNum(overall.height)} in` : "";
+  const rows = [
+    ["Part number", props.partNumber],
+    ["Description", props.description],
+    ["Material", props.material],
+    ["Thickness", props.thickness],
+    ["Mass", props.mass],
+    ["Rev", props.rev],
+    ["Designer", props.designer],
+    ["Overall size", size],
+  ].filter((row) => row[1]);
+  if (!rows.length) return "";
+  return `<section class="panel"><h2>From the file</h2><dl class="facts">${rows.map(([label, value]) => `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`).join("")}</dl></section>`;
+}
+
+function trimNum(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "";
+  return String(Math.round(number * 10000) / 10000);
 }
 
 function signoffPanel(template, props) {
@@ -282,44 +284,39 @@ function signoffPanel(template, props) {
 
 function bendPanel(job) {
   const bends = (job.model && job.model.bends) || [];
-  const rows = bends.map((bend, index) => bendRow(bend, index)).join("");
+  if (!bends.length) return "";
+  const rows = bends.map((bend) => `<tr>
+    <td>${esc(bend.id ?? "")}</td>
+    <td>${esc(bend.direction ?? "")}</td>
+    <td>${esc(bend.angle ?? "")}</td>
+    <td>${esc(bend.radius ?? "")}</td>
+  </tr>`).join("");
   return `<section class="panel">
     <h2>Bend table</h2>
-    <table class="data" data-rows="bend">
-      <thead><tr><th>ID</th><th>Direction</th><th>Angle</th><th>Radius</th><th></th></tr></thead>
+    <table class="data">
+      <thead><tr><th>ID</th><th>Direction</th><th>Angle</th><th>Radius</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
-    <button class="btn small" type="button" id="addBend" style="margin-top:8px">Add bend</button>
   </section>`;
 }
 
-function bendRow(bend) {
-  return `<tr>
-    <td><input data-key="id" value="${esc(bend.id ?? "")}"></td>
-    <td><input data-key="direction" value="${esc(bend.direction ?? "UP")}"></td>
-    <td><input data-key="angle" value="${esc(bend.angle ?? "")}"></td>
-    <td><input data-key="radius" value="${esc(bend.radius ?? "")}"></td>
-    <td class="row-actions"><button type="button" class="btn small" data-remove>✕</button></td>
-  </tr>`;
-}
-
 function bomPanel(job) {
+  const rowsIn = job.bomRows || [];
+  if (!rowsIn.length) return "";
   const format = state.formats.find((item) => item.id === job.bomFormatId) || state.formats[0];
   const columns = (format && format.columns) || [];
   const options = state.formats.map((item) => `<option value="${esc(item.id)}" ${item.id === job.bomFormatId ? "selected" : ""}>${esc(item.name)}</option>`).join("");
   const head = columns.map((col) => `<th>${esc(col.heading)}</th>`).join("");
-  const rows = (job.bomRows || []).map((row) => `<tr>
-    ${columns.map((col) => `<td><input data-key="${esc(col.key)}" value="${esc(row[col.key] ?? "")}"></td>`).join("")}
-    <td class="row-actions"><button type="button" class="btn small" data-remove>✕</button></td>
+  const rows = rowsIn.map((row) => `<tr>
+    ${columns.map((col) => `<td>${esc(row[col.key] ?? "")}</td>`).join("")}
   </tr>`).join("");
   return `<section class="panel">
     <h2>${esc((format && format.title) || "Parts List")}</h2>
     <label class="field">Format<select name="bomFormat">${options}</select></label>
-    <table class="data" data-rows="bom" style="margin-top:10px">
-      <thead><tr>${head}<th></th></tr></thead>
+    <table class="data" style="margin-top:10px">
+      <thead><tr>${head}</tr></thead>
       <tbody>${rows}</tbody>
     </table>
-    <button class="btn small" type="button" id="addItem" style="margin-top:8px">Add item</button>
   </section>`;
 }
 
@@ -390,10 +387,6 @@ function bindJob() {
   document.getElementById("more").addEventListener("click", () => setViewCount(Number(document.getElementById("viewCount").value) + 1));
   document.getElementById("viewCount").addEventListener("change", (event) => setViewCount(Number(event.target.value)));
   form.querySelectorAll(".chip").forEach((chip) => chip.addEventListener("click", () => toggleChip(chip)));
-  const addBend = document.getElementById("addBend");
-  if (addBend) addBend.addEventListener("click", () => addBendRow());
-  const addItem = document.getElementById("addItem");
-  if (addItem) addItem.addEventListener("click", () => addBomRow());
   form.querySelectorAll("[data-remove]").forEach((button) => {
     button.addEventListener("click", () => {
       button.closest("tr").remove();
@@ -423,21 +416,6 @@ function toggleChip(chip) {
   if (chip.classList.contains("on") && on.length <= 2) return;
   chip.classList.toggle("on");
   document.getElementById("viewCount").value = String(document.querySelectorAll(".chip.on").length);
-}
-
-function addBendRow() {
-  const body = document.querySelector("[data-rows=bend] tbody");
-  body.insertAdjacentHTML("beforeend", bendRow({ id: String(body.children.length + 1), direction: "UP", angle: "90", radius: "" }));
-  body.lastElementChild.querySelector("[data-remove]").addEventListener("click", (event) => event.target.closest("tr").remove());
-}
-
-function addBomRow() {
-  const format = state.formats.find((item) => item.id === (document.querySelector("select[name=bomFormat]") || {}).value) || state.formats[0];
-  const columns = (format && format.columns) || [];
-  const body = document.querySelector("[data-rows=bom] tbody");
-  const cells = columns.map((col) => `<td><input data-key="${esc(col.key)}" value="${col.key === "item" ? body.children.length + 1 : ""}"></td>`).join("");
-  body.insertAdjacentHTML("beforeend", `<tr>${cells}<td class="row-actions"><button type="button" class="btn small" data-remove>✕</button></td></tr>`);
-  body.lastElementChild.querySelector("[data-remove]").addEventListener("click", (event) => event.target.closest("tr").remove());
 }
 
 async function persist(body, rerender) {
