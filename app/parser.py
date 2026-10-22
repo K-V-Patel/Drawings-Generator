@@ -11,6 +11,50 @@ import io
 import json
 import zipfile
 
+_SCHEMA_MARKERS = (
+    "internalname",
+    "mnemonic=",
+    "categoryparameter",
+    "displayname=",
+    "propfmtid",
+    "propertyset",
+)
+
+
+def acceptable_property(value) -> bool:
+    """True when a string can be shown in a title block.
+
+    Inventor files contain the property schema (InternalName, Mnemonic) as
+    text. That schema is not a part number, description, or material.
+    """
+    text = str(value or "").strip()
+    if not text or len(text) > 240:
+        return False
+    lowered = text.lower()
+    if any(marker in lowered for marker in _SCHEMA_MARKERS):
+        return False
+    if any(ch in text for ch in "{}<>"):
+        return False
+    if lowered.startswith("key:") or text.startswith("*"):
+        return False
+    return True
+
+
+def sanitize_properties(props: dict | None, fallback_name: str = "") -> dict:
+    cleaned = dict(props or {})
+    for key in (
+        "partNumber", "description", "material", "title", "subject", "designer",
+        "drawnBy", "rev", "project", "stockNumber", "comments", "vendor",
+        "mass", "thickness", "productSeries", "customer", "orderNumber", "quoteNumber",
+    ):
+        if key in cleaned and cleaned.get(key) not in (None, "") and not acceptable_property(cleaned.get(key)):
+            cleaned[key] = ""
+    if not acceptable_property(cleaned.get("partNumber")):
+        stem = str(fallback_name or "").rsplit(".", 1)[0].strip()
+        cleaned["partNumber"] = stem if acceptable_property(stem) else ""
+    return cleaned
+
+
 PROP_NAMES = {
     "Part Number": "partNumber",
     "PartNumber": "partNumber",
@@ -111,6 +155,9 @@ def _component_row(item: dict) -> dict:
 
 
 def _clean_props(props: dict, description: str) -> dict:
+    props = sanitize_properties(props)
+    if not acceptable_property(description):
+        description = ""
     return {
         "partNumber": props.get("partNumber") or "",
         "description": description,
@@ -146,14 +193,14 @@ def _ole_summary(data: bytes, warnings: list[str]) -> dict:
     try:
         ole = olefile.OleFileIO(io.BytesIO(data))
         meta = ole.get_metadata()
-        if meta.title:
-            found["title"] = str(meta.title)
-        if meta.subject:
-            found["subject"] = str(meta.subject)
-        if meta.author:
-            found["drawnBy"] = str(meta.author)
-        if meta.comments:
-            found["comments"] = str(meta.comments)
+        if meta.title and acceptable_property(meta.title):
+            found["title"] = str(meta.title).strip()
+        if meta.subject and acceptable_property(meta.subject):
+            found["subject"] = str(meta.subject).strip()
+        if meta.author and acceptable_property(meta.author):
+            found["drawnBy"] = str(meta.author).strip()
+        if meta.comments and acceptable_property(meta.comments):
+            found["comments"] = str(meta.comments).strip()
         ole.close()
     except Exception as exc:
         warnings.append(f"Summary properties could not be read ({exc}).")
@@ -211,10 +258,10 @@ def _scrape_properties(data: bytes) -> dict:
         key = PROP_NAMES.get(value)
         if not key or index + 1 >= len(strings):
             continue
-        nxt = strings[index + 1]
-        if nxt in PROP_NAMES or not nxt.strip():
+        nxt = strings[index + 1].strip()
+        if nxt in PROP_NAMES or not acceptable_property(nxt):
             continue
-        props.setdefault(key, nxt.strip())
+        props.setdefault(key, nxt)
     return props
 
 

@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path
 
 from app.db import connect, dumps, loads
-from app.seed import BEND_COLUMNS, MERIDIAN, NORSTAR
+from app.seed import BEND_COLUMNS, COMPANY
 
 SHOP_TEMPLATE_DIR = r"C:\Users\Public\Documents\Autodesk\Inventor 2025\Templates\en-US"
 CATALOG_SCHEMA = "drawgen-templates/1"
@@ -352,20 +352,7 @@ def _table_for(drawing_type: str) -> dict:
 
 
 def _company_for(relative: str, title_block: str) -> dict:
-    blob = f"{relative} {title_block}".lower()
-    if "norstar" in blob:
-        return dict(NORSTAR)
-    if "meridian" in blob:
-        return dict(MERIDIAN)
-    return {
-        "name": "",
-        "sub": "",
-        "mark": "none",
-        "productSeries": "",
-        "standard": "THIS DRAWING CONFORMS TO ASME Y14.5M-1994 FOR DOCUMENTATION PRACTICES",
-        "proprietary": "",
-        "tolerances": [".X ± 0.1", ".XX ± 0.03", ".XXX ± 0.010", "ANGLE ± 0.5"],
-    }
+    return dict(COMPANY)
 
 
 def _sheet_size(raw: dict, from_catalog: bool) -> tuple[float, float, str, bool]:

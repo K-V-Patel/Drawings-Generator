@@ -14,9 +14,9 @@ from fastapi.staticfiles import StaticFiles
 from app.db import connect, dumps, init_db, loads
 from app.drawing.compose import compose
 from app.drawing.export import to_dxf, to_pdf, to_svg
-from app.examples_lib import all_examples, example_by_id
-from app.inventor_templates import import_uploads, source_status, sync_if_reachable
-from app.parser import from_drawgen, parse_upload
+from app.drawing.views import view_has_geometry
+from app.inventor_templates import source_status
+from app.parser import from_drawgen, parse_upload, sanitize_properties
 from app.seed import BEND_COLUMNS, seed_if_empty
 from app.sop import review
 
@@ -42,7 +42,6 @@ def new_id() -> str:
 async def lifespan(_app: FastAPI):
     init_db()
     seed_if_empty()
-    sync_if_reachable()
     yield
 
 
@@ -121,7 +120,7 @@ def _job_from_row(row) -> dict:
         "bomFormatId": row["bom_format_id"],
         "viewCount": row["view_count"],
         "selectedViews": loads(row["selected_views_json"], []),
-        "properties": loads(row["properties_json"], {}),
+        "properties": sanitize_properties(loads(row["properties_json"], {}), row["source_name"] or ""),
         "model": loads(row["model_json"], {}),
         "bomRows": loads(row["bom_rows_json"], []),
         "warnings": loads(row["warnings_json"], []),
@@ -154,8 +153,10 @@ def _load_format(format_id: str | None) -> dict | None:
 
 def _templates() -> list[dict]:
     with connect() as conn:
-        rows = conn.execute("SELECT * FROM templates ORDER BY name").fetchall()
-    return [_template_from_row(row) for row in rows]
+        rows = conn.execute("SELECT * FROM templates").fetchall()
+    order = {"standard-idw": 0, "standard-dwg": 1, "signoff": 2}
+    loaded = [_template_from_row(row) for row in rows]
+    return sorted(loaded, key=lambda item: (order.get(item["id"], 9), item["name"]))
 
 
 def _choose_template(parsed: dict) -> dict:
@@ -167,17 +168,28 @@ def _choose_template(parsed: dict) -> dict:
         match = next((item for item in templates if item["id"] == wanted), None)
         if match:
             return match
-    kind = parsed.get("fileKind")
     model_kind = (parsed.get("model") or {}).get("kind")
-    if kind == "ipt" or model_kind == "part":
-        pool = [item for item in templates if item["drawingType"] == "part"]
-    elif model_kind == "weldment":
-        pool = [item for item in templates if item["drawingType"] == "weldment"]
-    elif model_kind == "signoff":
-        pool = [item for item in templates if item["drawingType"] == "signoff"]
-    else:
-        pool = [item for item in templates if item["drawingType"] == "assembly"]
-    return (pool or templates)[0]
+    if model_kind == "signoff":
+        match = next((item for item in templates if item["drawingType"] == "signoff"), None)
+        if match:
+            return match
+    match = next((item for item in templates if item["id"] == "standard-idw"), None)
+    return match or templates[0]
+
+
+def _default_views(template: dict, parsed: dict) -> list[str]:
+    order = [view["role"] for view in template.get("views") or []]
+    if template.get("drawingType") == "standard":
+        kind = parsed.get("fileKind")
+        model_kind = (parsed.get("model") or {}).get("kind")
+        if kind == "iam" or model_kind in {"assembly", "weldment"}:
+            preferred = ["side", "front", "end", "iso"]
+        else:
+            preferred = ["front", "side", "iso"]
+            if (parsed.get("model") or {}).get("bends"):
+                preferred.append("flat")
+        return [role for role in preferred if role in order]
+    return [role for role in (template.get("defaultViews") or order) if role in order]
 
 
 def _views_for(template: dict, parsed: dict) -> list[str]:
@@ -200,7 +212,7 @@ def _views_for(template: dict, parsed: dict) -> list[str]:
         if count and len(chosen) > count:
             chosen = chosen[:count]
         return chosen
-    chosen = [role for role in (template.get("defaultViews") or order) if role in order]
+    chosen = _default_views(template, parsed)
     if count and len(chosen) > count:
         chosen = chosen[:count]
     if len(chosen) < 2:
@@ -208,11 +220,54 @@ def _views_for(template: dict, parsed: dict) -> list[str]:
     return chosen
 
 
+def _resolved_drawing_type(template: dict, job: dict) -> str:
+    kind = template.get("drawingType") or "part"
+    if kind != "standard":
+        return kind
+    model_kind = (job.get("model") or {}).get("kind")
+    if model_kind == "weldment":
+        return "weldment"
+    if job.get("sourceKind") == "iam" or model_kind == "assembly":
+        return "assembly"
+    return "part"
+
+
+def _effective_template(template: dict, job: dict) -> dict:
+    drawing = _resolved_drawing_type(template, job)
+    table = dict(template.get("table") or {})
+    if template.get("drawingType") == "standard" or table.get("kind") in {None, "", "auto"}:
+        if drawing == "part":
+            table = {"kind": "bend", "title": "TABLE", "columns": [dict(column) for column in BEND_COLUMNS]}
+        elif drawing == "signoff":
+            table = {"kind": "signoff"}
+        else:
+            table = {"kind": "parts", "title": "Parts List"}
+    resolved = dict(template)
+    resolved["drawingType"] = drawing
+    resolved["table"] = table
+    return resolved
+
+
+def _drawable(job: dict) -> bool:
+    model = job.get("model") or {}
+    overall = model.get("overall") or {}
+    try:
+        sized = all(float(overall.get(key) or 0) > 0 for key in ("length", "width", "height"))
+    except (TypeError, ValueError):
+        sized = False
+    if sized:
+        return True
+    for view in (model.get("views") or {}).values():
+        if isinstance(view, dict) and view_has_geometry(view):
+            return True
+    return False
+
+
 def _insert_job(parsed: dict) -> dict:
     template = _choose_template(parsed)
     fmt = _load_format(parsed.get("bomFormatId"))
     views = _views_for(template, parsed)
-    props = dict(parsed.get("properties") or {})
+    props = sanitize_properties(dict(parsed.get("properties") or {}), parsed.get("fileName") or "")
     if not props.get("productSeries"):
         props["productSeries"] = (template.get("company") or {}).get("productSeries") or ""
     props.setdefault("extras", {})
@@ -251,7 +306,7 @@ def _present(row) -> dict:
     job = _job_from_row(row)
     template = _load_template(job["templateId"]) if job["templateId"] else None
     if job["sop"] is None and template:
-        job["sop"] = review(_compose_template(template), _for_rules(job))
+        job["sop"] = review(_compose_template(_effective_template(template, job)), _for_rules(job))
     job["bomReady"] = job["sourceKind"] == "iam" or (template or {}).get("table", {}).get("kind") == "parts"
     return job
 
@@ -285,36 +340,12 @@ def template_source():
 
 @app.post("/api/template-source/sync")
 def template_source_sync():
-    status = source_status()
-    if not status["reachable"]:
-        raise ValueError(
-            "This machine cannot open "
-            + status["path"]
-            + ". Run tools/ExportTemplates.vb in Inventor and drop the JSON here, or zip that folder and drop it."
-        )
-    result = sync_if_reachable() or {"imported": 0, "updated": 0, "skipped": []}
-    result["templates"] = _templates()
-    result["source"] = source_status()
-    return result
+    raise ValueError("The drawing templates are Standard.idw, Standard.dwg, and Sign off.")
 
 
 @app.post("/api/templates/import")
 async def import_template_files(request: Request):
-    content_type = request.headers.get("content-type", "")
-    if "multipart/form-data" not in content_type:
-        raise ValueError("Drop a template list (.json), a zip of the template folder, or an .idw / .dwg file.")
-    form = await request.form()
-    uploads = form.getlist("file")
-    files = []
-    for upload in uploads:
-        if upload is None or not getattr(upload, "filename", None):
-            continue
-        data = await upload.read()
-        files.append((upload.filename, data))
-    result = import_uploads(files)
-    result["templates"] = _templates()
-    result["source"] = source_status()
-    return result
+    raise ValueError("The drawing templates are Standard.idw, Standard.dwg, and Sign off.")
 
 
 @app.get("/api/templates")
@@ -339,21 +370,12 @@ async def update_template(template_id: str, request: Request):
 
 @app.post("/api/templates/{template_id}/duplicate")
 def duplicate_template(template_id: str):
-    current = _load_template(template_id)
-    current["name"] = f"{current['name']} copy"
-    current["source"] = None
-    template_id = new_id()
-    return _write_template(template_id, current, now())
+    raise ValueError("The drawing templates are Standard.idw, Standard.dwg, and Sign off.")
 
 
 @app.delete("/api/templates/{template_id}")
 def delete_template(template_id: str):
-    with connect() as conn:
-        count = conn.execute("SELECT COUNT(*) AS n FROM templates").fetchone()["n"]
-        if count <= 1:
-            raise ValueError("Keep at least one drawing template.")
-        conn.execute("DELETE FROM templates WHERE id = ?", (template_id,))
-    return {"ok": True}
+    raise ValueError("The drawing templates are Standard.idw, Standard.dwg, and Sign off.")
 
 
 @app.get("/api/bom-formats")
@@ -406,20 +428,7 @@ def delete_format(format_id: str):
 
 @app.get("/api/examples")
 def list_examples():
-    summaries = []
-    for example in all_examples():
-        summaries.append({
-            "id": example["id"],
-            "group": example["group"],
-            "sourcePath": example["sourcePath"],
-            "fidelity": example["fidelity"],
-            "fileName": example["fileName"],
-            "fileKind": example["fileKind"],
-            "description": (example.get("properties") or {}).get("description") or "",
-            "partNumber": (example.get("properties") or {}).get("partNumber") or "",
-            "templateId": example.get("templateId"),
-        })
-    return summaries
+    return []
 
 
 @app.get("/api/jobs")
@@ -459,12 +468,8 @@ async def create_job(request: Request):
     else:
         body = await request.json()
         if body.get("exampleId"):
-            example = example_by_id(body["exampleId"])
-            if not example:
-                raise ValueError("That example is not in the library.")
-            parsed = example
-        else:
-            parsed = from_drawgen(body, body.get("fileName") or "model.json")
+            raise ValueError("Drop an Inventor part or assembly.")
+        parsed = from_drawgen(body, body.get("fileName") or "model.json")
     return _insert_job(parsed)
 
 
@@ -484,7 +489,7 @@ async def update_job(job_id: str, request: Request):
     selected = body.get("selectedViews", job["selectedViews"])
     count = body.get("viewCount", len(selected))
     views = _views_for(template, {"selectedViews": selected, "viewCount": count})
-    props = body.get("properties", job["properties"]) or {}
+    props = sanitize_properties(body.get("properties", job["properties"]) or {}, job["sourceName"] or "")
     props.setdefault("extras", {})
     model = body.get("model", job["model"]) or {}
     bom_rows = body.get("bomRows", job["bomRows"]) or []
@@ -512,7 +517,11 @@ def generate_job(job_id: str):
     job = _job_from_row(row)
     if len(job["selectedViews"]) < 2:
         raise ValueError("Ask for at least 2 views before generating the sheet.")
-    template = _load_template(job["templateId"])
+    if not _drawable(job):
+        raise ValueError(
+            "This file has no profiles and no overall size. Enter length, width, and height, or drop the drawgen.json from Inventor, before generating the sheet."
+        )
+    template = _effective_template(_load_template(job["templateId"]), job)
     fmt = _load_format(job["bomFormatId"])
     rules_job = _for_rules(job)
     sop = review(_compose_template(template), rules_job)
@@ -600,8 +609,8 @@ def _csv(value) -> str:
 def _validate_template(template: dict) -> None:
     if not str(template.get("name") or "").strip():
         raise ValueError("Give the template a name.")
-    if template.get("drawingType") not in {"part", "weldment", "assembly", "signoff"}:
-        raise ValueError("Drawing type must be part, weldment, assembly, or signoff.")
+    if template.get("drawingType") not in {"part", "weldment", "assembly", "signoff", "standard"}:
+        raise ValueError("Drawing type must be standard, part, weldment, assembly, or signoff.")
     if template.get("appliesTo") not in {"ipt", "iam", "both"}:
         raise ValueError("A template applies to .ipt parts, .iam assemblies, or both.")
     views = template.get("views") or []

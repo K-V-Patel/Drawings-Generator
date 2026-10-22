@@ -2,16 +2,16 @@
 
 Shop-floor app for production drawings of Inventor parts (`.ipt`) and assemblies (`.iam`).
 
-## Open it
+## About
 
-https://proprietary-piece-deny-calculated.trycloudflare.com
+https://github.com/K-V-Patel/Drawings-Generator
 
-That address is a temporary tunnel to the copy of this app running with the project. It stays up while that machine is on. There is no sign-in, so the link is unlisted rather than private. The same app on this machine is at http://localhost:8000.
+To run the app, use the steps below and open http://localhost:8000.
 
 The flow matches the drawing note:
 
 1. Drop an `.ipt` or an `.iam`.
-2. Pick a drawing template. The shop borders are the `.idw` and `.dwg` files in `C:\Users\Public\Documents\Autodesk\Inventor 2025\Templates\en-US`. They are stored in the app and can be edited.
+2. Pick a drawing template. There are three: Standard.idw, Standard.dwg, and Sign off.
 3. For an assembly, the BOM is built immediately in the saved column format. Edit the cells before the sheet is issued.
 4. Say how many views are needed. The minimum is 2.
 5. Generate the sheet. Download PDF, DXF, or SVG.
@@ -27,13 +27,17 @@ pip install -r requirements.txt
 uvicorn app.main:app --port 8000
 ```
 
-Open https://proprietary-piece-deny-calculated.trycloudflare.com, or `http://localhost:8000` on this machine.
+Open http://localhost:8000. The project on GitHub is https://github.com/K-V-Patel/Drawings-Generator.
 
-## Worked examples
+## How a sheet is built
 
-Norstar sheets are rebuilt from the figures in the Creating Drawings SOP (center pivot plate, CCRB body weldment, CCRB head assembly, AVF conveyor signoff).
+Part sheets use front, side, and isometric views, plus a flat view when the part has bends. Overall height and width are dimensioned, thickness goes where it is easiest to see, and laser cut-outs that are already in the DXF are not dimensioned. Bends are listed with direction up.
 
-Meridian sheets are sample jobs in that same pattern, standing in for `T:\Engineering\Custom Projects\Meridian`. That folder was not available when this app was built. Norstar's live models live under `T:\Engineering\Custom Projects\Norstar Ind.` and were not mounted here either. Sample sheets are marked on the border. Confirm them against the Inventor model before issue.
+Assembly sheets use as many views as production needs, with overall height, width, and depth, and a parts list with balloons in the top left. Weld symbols go on the clearest view when the assembly is a weldment.
+
+Sign off sheets use a side elevation, a front view, an end cross-section, and inlet and discharge faces. Customer, order number, quote number, signature, and date sit in the lower left.
+
+A file with no profiles and no overall size does not generate a sheet. Enter the size, or drop the `.drawgen.json` from Inventor.
 
 ## Inventor export
 
@@ -43,13 +47,13 @@ Run `tools/ExportDrawgen.vb` as an iLogic rule inside Inventor. It writes a `.dr
 
 ## Drawing templates
 
-Inventor drawing templates live in:
+The app offers three templates:
 
-`C:\Users\Public\Documents\Autodesk\Inventor 2025\Templates\en-US`
+- Standard.idw
+- Standard.dwg
+- Sign off
 
-That is the English template folder (Standard.idw, Standard.dwg, and any company borders saved there). Subfolders are the tabs in Inventor's New dialog. This app cannot see that Windows folder from the machine it is running on.
-
-Run `tools/ExportTemplates.vb` as an iLogic rule. It opens each `.idw` and `.dwg`, reads the sheet size, title block, and border, and writes `drawgen-templates.json` on the Desktop. Drop that file on the Templates page. A zip of the folder works too; without Inventor the file names come in and the sheet size stays ANSI B until the JSON replaces it. Re-importing updates the sheet size and leaves a drawing type you already changed.
+The two standard files are the English Inventor templates in `C:\Users\Public\Documents\Autodesk\Inventor 2025\Templates\en-US`. Sign off is the third sheet, for a unit approval drawing. Sheet size, views, and the title block of each one can be edited. The list does not grow past these three.
 
 ## What is stored
 

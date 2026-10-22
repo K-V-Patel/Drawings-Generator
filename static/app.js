@@ -74,9 +74,7 @@ async function boot() {
   const { name, id } = route();
   try {
     if (name === "new") {
-      [state.examples, state.templateSource] = await Promise.all([
-        api("/api/examples"), api("/api/template-source"),
-      ]);
+      state.templateSource = await api("/api/template-source");
       renderNew();
     } else if (name === "job" && id) {
       [state.job, state.templates, state.formats, state.templateSource] = await Promise.all([
@@ -111,36 +109,16 @@ function errorBlock() {
 
 function renderNew() {
   document.querySelector("main").classList.remove("wide");
-  const groups = {};
-  state.examples.forEach((example) => {
-    (groups[example.group] ||= []).push(example);
-  });
-  const groupHtml = Object.entries(groups).map(([name, items]) => `
-    <section class="group">
-      <h2>${esc(name)} <span class="path">${esc(items[0].sourcePath)}</span></h2>
-      <div class="cards">
-        ${items.map((item) => `
-          <button class="card" data-example="${esc(item.id)}">
-            <span>
-              <b>${esc(item.partNumber)}</b>
-              <small> ${esc(item.description)}</small>
-              <div class="muted">${esc(item.fileName)}</div>
-            </span>
-            <span class="tag">${esc(item.fileKind)}</span>
-          </button>`).join("")}
-      </div>
-    </section>`).join("");
   app.innerHTML = `
     ${errorBlock()}
     <h1>New drawing</h1>
-    <p class="lede">Drop a part (.ipt) or an assembly (.iam). Pick a drawing template, say how many views are needed (at least two), and generate the sheet. An assembly builds a BOM in the saved format as soon as the file is in.</p>
+    <p class="lede">Drop a part (.ipt) or an assembly (.iam). Pick one of the three drawing templates, say how many views are needed (at least two), and generate the sheet. An assembly builds a BOM in the saved format as soon as the file is in.</p>
     ${templateSourceNote()}
     <div class="drop" id="drop">
       <strong>Drop an .ipt or an .iam</strong>
       <span>JSON exports from the Inventor rule and zip bundles work too.</span>
       <label class="file-btn">Browse<input id="file" type="file" accept=".ipt,.iam,.json,.zip" hidden></label>
-    </div>
-    <div class="groups">${groupHtml}</div>`;
+    </div>`;
   const drop = document.getElementById("drop");
   drop.addEventListener("dragover", (event) => { event.preventDefault(); drop.classList.add("hot"); });
   drop.addEventListener("dragleave", () => drop.classList.remove("hot"));
@@ -152,9 +130,6 @@ function renderNew() {
   document.getElementById("file").addEventListener("change", (event) => {
     if (event.target.files[0]) upload(event.target.files[0]);
   });
-  app.querySelectorAll("[data-example]").forEach((button) => {
-    button.addEventListener("click", () => openExample(button.dataset.example));
-  });
 }
 
 async function upload(file) {
@@ -162,19 +137,6 @@ async function upload(file) {
   body.append("file", file);
   try {
     const job = await api("/api/jobs", { method: "POST", body });
-    location.hash = `#/job/${job.id}`;
-  } catch (error) {
-    flash(error);
-  }
-}
-
-async function openExample(id) {
-  try {
-    const job = await api("/api/jobs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ exampleId: id }),
-    });
     location.hash = `#/job/${job.id}`;
   } catch (error) {
     flash(error);
@@ -202,9 +164,10 @@ function renderJob() {
     <button type="button" class="chip ${selected.has(view.role) ? "on" : ""}" data-role="${esc(view.role)}">${esc(view.label || view.role)}</button>`).join("");
   const props = job.properties || {};
   const overall = (job.model && job.model.overall) || {};
-  const showBends = template.drawingType === "part";
-  const showBom = job.sourceKind === "iam" || (template.table && template.table.kind === "parts");
-  const showSignoff = template.drawingType === "signoff";
+  const sheetKind = sheetKindFor(template, job);
+  const showBends = sheetKind === "part";
+  const showBom = sheetKind === "assembly" || sheetKind === "weldment" || job.sourceKind === "iam";
+  const showSignoff = sheetKind === "signoff";
   const warnings = (job.warnings || []).map((line) => `<p>${esc(line)}</p>`).join("");
   app.innerHTML = `
     ${errorBlock()}
@@ -535,7 +498,7 @@ function renderLibrary() {
   app.innerHTML = `
     <h1>Issued drawings</h1>
     <p class="lede">Sheets stay on the template and BOM format they were generated with. Editing a template later does not rewrite a sheet that is already issued.</p>
-    <div class="library">${rows || `<div class="panel"><p>No sheets yet. Start from a Norstar or Meridian example, or drop an Inventor file.</p><a class="btn primary" href="#/new">New drawing</a></div>`}</div>`;
+    <div class="library">${rows || `<div class="panel"><p>No sheets yet. Drop an Inventor part or assembly.</p><a class="btn primary" href="#/new">New drawing</a></div>`}</div>`;
 }
 
 function statusLabel(status) {
@@ -544,13 +507,18 @@ function statusLabel(status) {
   return "Setup";
 }
 
+function sheetKindFor(template, job) {
+  if (!template || template.drawingType !== "standard") return (template && template.drawingType) || "part";
+  const modelKind = job && job.model && job.model.kind;
+  if (modelKind === "weldment") return "weldment";
+  if ((job && job.sourceKind === "iam") || modelKind === "assembly") return "assembly";
+  return "part";
+}
+
 function templateSourceNote() {
   const source = state.templateSource;
   if (!source) return "";
-  const detail = source.reachable
-    ? `This machine can read that folder (${source.drawings.length} drawing template${source.drawings.length === 1 ? "" : "s"}).`
-    : "This copy of the app cannot open that Windows folder. Run tools/ExportTemplates.vb in Inventor and drop drawgen-templates.json here, or zip the folder and drop it.";
-  return `<div class="source-banner"><strong>Inventor 2025 drawing templates</strong><span class="path">${esc(source.path)}</span><span>${esc(detail)}</span></div>`;
+  return `<div class="source-banner"><strong>Three drawing templates</strong><span>Standard.idw, Standard.dwg, and Sign off.</span><span class="path">${esc(source.path)}</span></div>`;
 }
 
 function templateMeta(item) {
@@ -566,7 +534,6 @@ function appliesLabel(value) {
 function renderTemplates(id) {
   document.querySelector("main").classList.remove("wide");
   const template = state.templates.find((item) => item.id === id) || state.templates[0];
-  const source = state.templateSource || {};
   const list = state.templates.map((item) => `
     <button class="list-row ${item.id === template.id ? "on" : ""}" data-id="${esc(item.id)}">
       <strong>${esc(item.name)}</strong>
@@ -575,50 +542,16 @@ function renderTemplates(id) {
   app.innerHTML = `
     ${errorBlock()}
     <h1>Drawing templates</h1>
-    <p class="lede">The shop borders are the .idw and .dwg files in the Inventor template folder. Title block, views, sheet size, and the bend table stay editable here. The next sheet uses the saved copy.</p>
+    <p class="lede">Two standard drawings and one sign off. Title block, views, and sheet size stay editable. The next sheet uses the saved copy.</p>
     ${templateSourceNote()}
-    <div class="drop compact" id="templateDrop">
-      <strong>Drop the template list</strong>
-      <span>.json from ExportTemplates.vb, a zip of that folder, or the .idw / .dwg files.</span>
-      <label class="file-btn">Browse<input id="templateFile" type="file" accept=".json,.zip,.idw,.dwg" multiple hidden></label>
-    </div>
-    ${source.reachable ? `<p><button class="btn" id="syncTemplates" type="button">Read the folder again</button></p>` : ""}
     <div class="split">
       <div>
         ${list}
-        <button class="btn" id="duplicate" type="button">Duplicate</button>
       </div>
       <form class="editor" id="templateForm" data-template-id="${esc(template.id)}">${templateEditor(template)}</form>
     </div>`;
-  const templateDrop = document.getElementById("templateDrop");
-  templateDrop.addEventListener("dragover", (event) => { event.preventDefault(); templateDrop.classList.add("hot"); });
-  templateDrop.addEventListener("dragleave", () => templateDrop.classList.remove("hot"));
-  templateDrop.addEventListener("drop", (event) => {
-    event.preventDefault();
-    if (event.dataTransfer.files.length) importTemplateFiles(event.dataTransfer.files);
-  });
-  document.getElementById("templateFile").addEventListener("change", (event) => {
-    if (event.target.files.length) importTemplateFiles(event.target.files);
-  });
-  const syncTemplates = document.getElementById("syncTemplates");
-  if (syncTemplates) {
-    syncTemplates.addEventListener("click", async () => {
-      try {
-        const result = await api("/api/template-source/sync", { method: "POST" });
-        state.templates = result.templates;
-        state.templateSource = result.source;
-        renderTemplates(template.id);
-      } catch (error) {
-        flash(error);
-      }
-    });
-  }
   app.querySelectorAll(".list-row").forEach((button) => {
     button.addEventListener("click", () => { location.hash = `#/templates/${button.dataset.id}`; });
-  });
-  document.getElementById("duplicate").addEventListener("click", async () => {
-    const copy = await api(`/api/templates/${template.id}/duplicate`, { method: "POST" });
-    location.hash = `#/templates/${copy.id}`;
   });
   document.getElementById("templateForm").addEventListener("submit", (event) => saveTemplate(event, template));
   document.getElementById("addView").addEventListener("click", () => addEditorRow("views", viewRow({ role: "front", label: "FRONT" })));
@@ -628,23 +561,6 @@ function renderTemplates(id) {
   if (addField) addField.addEventListener("click", () => addEditorRow("fields", fieldRow({ key: "note", label: "NOTE" })));
   document.getElementById("sheetLabel").addEventListener("change", (event) => applySheetSize(event.target.value));
   bindRemove();
-}
-
-async function importTemplateFiles(fileList) {
-  const body = new FormData();
-  [...fileList].forEach((file) => body.append("file", file));
-  try {
-    const result = await api("/api/templates/import", { method: "POST", body });
-    state.templates = result.templates;
-    state.templateSource = result.source;
-    const note = `Added ${result.imported}, updated ${result.updated}.`;
-    state.error = "";
-    renderTemplates();
-    const banner = document.querySelector(".source-banner");
-    if (banner) banner.insertAdjacentHTML("afterend", `<div class="banner ok"><p>${esc(note)}</p></div>`);
-  } catch (error) {
-    flash(error);
-  }
 }
 
 function templateEditor(template) {
@@ -664,7 +580,7 @@ function templateEditor(template) {
     <div class="grid-2">
       <label class="field">Name<input name="name" value="${esc(template.name)}"></label>
       <label class="field">Drawing type
-        <select name="drawingType">${["part", "weldment", "assembly", "signoff"].map((item) => `<option ${item === template.drawingType ? "selected" : ""}>${item}</option>`).join("")}</select>
+        <select name="drawingType">${["standard", "part", "weldment", "assembly", "signoff"].map((item) => `<option ${item === template.drawingType ? "selected" : ""}>${item}</option>`).join("")}</select>
       </label>
       <label class="field">Applies to
         <select name="appliesTo">
@@ -692,7 +608,7 @@ function templateEditor(template) {
     <button class="btn small" type="button" id="addView">Add view</button>
     <label class="field" style="margin-top:14px">Table
       <select name="tableKind">
-        ${["none", "bend", "parts", "signoff"].map((item) => `<option value="${item}" ${(template.table || {}).kind === item ? "selected" : ""}>${item}</option>`).join("")}
+        ${["auto", "none", "bend", "parts", "signoff"].map((item) => `<option value="${item}" ${(template.table || {}).kind === item ? "selected" : ""}>${item}</option>`).join("")}
       </select>
     </label>
     ${bend ? `<h2>Bend table columns</h2><div id="columns">${columns}</div><button class="btn small" type="button" id="addColumn">Add column</button>` : `<div id="columns"></div>`}
@@ -701,7 +617,6 @@ function templateEditor(template) {
     <button class="btn small" type="button" id="addField">Add line</button>
     <div class="actions" style="margin-top:16px">
       <button class="btn primary" type="submit">Save template</button>
-      <button class="btn" type="button" id="deleteTemplate">Delete</button>
     </div>`;
 }
 
