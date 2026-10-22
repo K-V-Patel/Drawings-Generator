@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drawings Generator</title>
+<link rel="canonical" href="https://k-v-patel.github.io/Drawings-Generator/">
+<script>
+(function () {
+  var path = location.pathname;
+  if (!path.endsWith("/")) {
+    var leaf = path.slice(path.lastIndexOf("/") + 1);
+    path = leaf.indexOf(".") >= 0 ? path.slice(0, path.lastIndexOf("/") + 1) : path + "/";
+  }
+  var base = document.createElement("base");
+  base.href = path;
+  document.head.appendChild(base);
+})();
+</script>
+<link rel="stylesheet" href="static/styles.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/new">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <span>
+      <strong>Drawings Generator</strong>
+      <em>Production sheets for parts and assemblies</em>
+    </span>
+  </a>
+  <nav>
+    <a href="#/new" data-nav="new">New drawing</a>
+    <a href="#/library" data-nav="library">Issued</a>
+    <a href="#/templates" data-nav="templates">Templates</a>
+    <a href="#/formats" data-nav="formats">BOM format</a>
+    <a class="share" href="https://k-v-patel.github.io/Drawings-Generator/" target="_blank" rel="noopener noreferrer">Live site</a>
+  </nav>
+</header>
+<main id="app"></main>
+<script src="static/browser.js"></script>
+<script src="static/app.js"></script>
+</body>
+</html>

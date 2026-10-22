@@ -228,6 +228,18 @@ def test_signoff_template_draws_the_customer_block(client):
     assert "SECTION A-A" in svg
 
 
+def test_home_page_is_ready_for_github_pages(client):
+    page = client.get("/")
+    assert page.status_code == 200
+    html = page.text
+    assert 'href="static/styles.css"' in html
+    assert 'src="static/browser.js"' in html
+    assert 'src="static/app.js"' in html
+    assert "https://k-v-patel.github.io/Drawings-Generator/" in html
+    assert 'href="/static/' not in html
+    assert 'src="/static/' not in html
+
+
 def test_extra_templates_are_refused(client):
     response = client.post("/api/templates/standard-idw/duplicate")
     assert response.status_code == 400

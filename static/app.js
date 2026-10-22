@@ -30,8 +30,29 @@ function formatWhen(iso) {
   return `${stamp} CT`;
 }
 
+let serverMode = null;
+
+async function usesServer() {
+  if (serverMode !== null) return serverMode;
+  try {
+    const response = await fetch("api/template-source", { headers: { Accept: "application/json" } });
+    const type = response.headers.get("content-type") || "";
+    serverMode = response.ok && type.includes("json");
+  } catch (error) {
+    serverMode = false;
+  }
+  if (!serverMode && window.drawgenBrowser) window.drawgenBrowser.active = true;
+  return serverMode;
+}
+
+function sheetLink(jobId, name) {
+  if (window.drawgenBrowser && window.drawgenBrowser.active) return window.drawgenBrowser.sheetLink(jobId, name);
+  return { url: `api/jobs/${jobId}/${name}`, download: "" };
+}
+
 async function api(path, options) {
-  const response = await fetch(path, options);
+  if (!(await usesServer())) return window.drawgenBrowser.handle(path, options);
+  const response = await fetch(String(path).replace(/^\//, ""), options);
   const type = response.headers.get("content-type") || "";
   if (!response.ok) {
     let detail = response.statusText;
@@ -452,21 +473,26 @@ function renderSheet() {
     <div class="check ${esc(item.status)}"><strong>${esc(item.rule)}</strong><span>${esc(item.detail)}</span></div>`).join("");
   const behind = job.status === "draft" && job.hasSheet
     ? `<div class="banner warn"><p>This is the last generated sheet. Generate again after edits.</p></div>` : "";
+  const pdf = job.hasSheet ? sheetLink(job.id, "sheet.pdf") : { url: "#", download: "" };
+  const dxf = job.hasSheet ? sheetLink(job.id, "sheet.dxf") : { url: "#", download: "" };
+  const svg = job.hasSheet ? sheetLink(job.id, "sheet.svg") : { url: "#", download: "" };
+  const csv = job.hasSheet && job.bomReady ? sheetLink(job.id, "bom.csv") : null;
+  const download = (link) => (link && link.download ? `download="${esc(link.download)}"` : "");
   app.innerHTML = `
     ${errorBlock()}
     ${behind}
     <div class="actions" style="margin-bottom:12px">
       <a class="btn" href="#/job/${esc(job.id)}">Edit setup</a>
-      <a class="btn primary" href="/api/jobs/${esc(job.id)}/sheet.pdf">PDF</a>
-      <a class="btn" href="/api/jobs/${esc(job.id)}/sheet.dxf">DXF</a>
-      <a class="btn" href="/api/jobs/${esc(job.id)}/sheet.svg">SVG</a>
-      ${job.bomReady ? `<a class="btn" href="/api/jobs/${esc(job.id)}/bom.csv">BOM CSV</a>` : ""}
+      <a class="btn primary" href="${esc(pdf.url)}" ${download(pdf)}>PDF</a>
+      <a class="btn" href="${esc(dxf.url)}" ${download(dxf)}>DXF</a>
+      <a class="btn" href="${esc(svg.url)}" ${download(svg)}>SVG</a>
+      ${csv ? `<a class="btn" href="${esc(csv.url)}" ${download(csv)}>BOM CSV</a>` : ""}
       <button class="btn" type="button" id="zoomOut">−</button>
       <button class="btn" type="button" id="zoomIn">+</button>
       <span class="muted">${esc(props.partNumber || "")} · ${esc(job.status)} · ${esc(formatWhen(job.updatedAt))}</span>
     </div>
     <div class="sheet-page">
-      <div class="sheet-scroll" id="sheetScroll">${job.hasSheet ? `<img id="sheetImg" alt="Production drawing for ${esc(props.partNumber || "this part")}" src="/api/jobs/${esc(job.id)}/sheet.svg?v=${Date.now()}">` : ""}</div>
+      <div class="sheet-scroll" id="sheetScroll">${job.hasSheet ? `<img id="sheetImg" alt="Production drawing for ${esc(props.partNumber || "this part")}" src="${esc(svg.download ? svg.url : `${svg.url}?v=${Date.now()}`)}">` : ""}</div>
       <aside>
         <h2>SOP check</h2>
         <div class="checks">${checks || "<p class='muted'>Generate the sheet to run the checklist.</p>"}</div>
@@ -518,7 +544,8 @@ function sheetKindFor(template, job) {
 function templateSourceNote() {
   const source = state.templateSource;
   if (!source) return "";
-  return `<div class="source-banner"><strong>Three drawing templates</strong><span>Standard.idw, Standard.dwg, and Sign off.</span><span class="path">${esc(source.path)}</span></div>`;
+  const pages = source.pages ? `<span>Opened from GitHub Pages. Sheets stay in this browser.</span>` : "";
+  return `<div class="source-banner"><strong>Three drawing templates</strong><span>Standard.idw, Standard.dwg, and Sign off.</span>${pages}<span class="path">${esc(source.path)}</span></div>`;
 }
 
 function templateMeta(item) {

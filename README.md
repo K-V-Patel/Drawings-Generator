@@ -4,9 +4,17 @@ Shop-floor app for production drawings of Inventor parts (`.ipt`) and assemblies
 
 ## About
 
-https://github.com/K-V-Patel/Drawings-Generator
+https://k-v-patel.github.io/Drawings-Generator/
 
-To run the app, use the steps below and open http://localhost:8000.
+Open that link to use the app. It is published with GitHub Pages from the `main` branch, the same way as https://k-v-patel.github.io/KrupaPatel-/.
+
+## Deploy (GitHub Pages — free)
+
+1. Push `index.html` and the `static/` folder to the `main` branch.
+2. Settings → Pages → Source: `main` / root.
+3. Live at https://k-v-patel.github.io/Drawings-Generator/ within a minute or two.
+
+Sheets opened from that link stay in the browser. The shop computer can still run the Python app below; that copy keeps a database on disk.
 
 The flow matches the drawing note:
 
@@ -27,7 +35,13 @@ pip install -r requirements.txt
 uvicorn app.main:app --port 8000
 ```
 
-Open http://localhost:8000. The project on GitHub is https://github.com/K-V-Patel/Drawings-Generator.
+Open http://localhost:8000. The public page is https://k-v-patel.github.io/Drawings-Generator/. The project on GitHub is https://github.com/K-V-Patel/Drawings-Generator.
+
+The same page also opens with no install:
+
+```bash
+python3 -m http.server 8000
+```
 
 ## How a sheet is built
 

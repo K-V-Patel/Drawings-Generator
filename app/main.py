@@ -724,7 +724,7 @@ def _write_format(format_id: str, fmt: dict, timestamp: str) -> None:
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html")
+    return FileResponse(STATIC.parent / "index.html")
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
