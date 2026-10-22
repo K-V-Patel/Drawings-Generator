@@ -4,7 +4,7 @@ Shop-floor app for production drawings of Inventor parts (`.ipt`) and assemblies
 
 ## Open it
 
-https://github.com/K-V-Patel/Drawings-Generator
+https://github.com/K-V-Patel/Drawing-Generator
 
 That is the project on GitHub. To run the app, use the steps below and open http://localhost:8000.
 
@@ -27,7 +27,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --port 8000
 ```
 
-Open http://localhost:8000. The project on GitHub is https://github.com/K-V-Patel/Drawings-Generator.
+Open http://localhost:8000. The project on GitHub is https://github.com/K-V-Patel/Drawing-Generator.
 
 ## How a sheet is built
 
