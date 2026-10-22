@@ -1,33 +1,15 @@
-"""Seed drawing templates and the Norstar parts-list format.
+"""The three drawing templates: Standard.idw, Standard.dwg, and Sign off.
 
-Edits made in the app are stored in SQLite and are not overwritten on the next start.
+Company names from sample jobs are not stored here. Edits to these three
+templates are kept. Any other template is removed on startup.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.db import connect, dumps
-
-NORSTAR = {
-    "name": "NORSTAR",
-    "sub": "INDUSTRIES",
-    "mark": "star",
-    "productSeries": "STANDARD DRAWING - IN",
-    "standard": "THIS DRAWING CONFORMS TO ASME Y14.5M-1994 FOR DOCUMENTATION PRACTICES",
-    "proprietary": "NOTICE: NORSTAR INDUSTRIES CLAIMS PROPRIETARY RIGHTS TO THE MATERIAL SHOWN. THE DRAWING MAY NOT BE REPRODUCED WITHOUT WRITTEN PERMISSION.",
-    "tolerances": [".X ± 0.1", ".XX ± 0.03", ".XXX ± 0.010", "ANGLE ± 0.5"],
-}
-
-MERIDIAN = {
-    "name": "MERIDIAN",
-    "sub": "MANUFACTURING",
-    "mark": "diamond",
-    "productSeries": "CUSTOM PROJECT",
-    "standard": "THIS DRAWING CONFORMS TO ASME Y14.5M-1994 FOR DOCUMENTATION PRACTICES",
-    "proprietary": "NOTICE: THIS DRAWING IS THE PROPERTY OF MERIDIAN. IT MAY NOT BE REPRODUCED WITHOUT WRITTEN PERMISSION.",
-    "tolerances": [".X ± 0.1", ".XX ± 0.03", ".XXX ± 0.010", "ANGLE ± 0.5"],
-}
+from app.db import connect, dumps, loads
+from app.parser import acceptable_property, sanitize_properties
 
 BEND_COLUMNS = [
     {"key": "id", "heading": "BEND ID", "width": 0.18},
@@ -36,39 +18,52 @@ BEND_COLUMNS = [
     {"key": "radius", "heading": "BEND RADIUS", "width": 0.25},
 ]
 
-PART_VIEWS = [
-    {"role": "flat", "label": "FLAT PATTERN"},
+COMPANY = {
+    "name": "",
+    "sub": "",
+    "mark": "none",
+    "productSeries": "",
+    "standard": "THIS DRAWING CONFORMS TO ASME Y14.5M-1994 FOR DOCUMENTATION PRACTICES",
+    "proprietary": "",
+    "tolerances": [],
+}
+
+STANDARD_VIEWS = [
     {"role": "front", "label": "FRONT"},
     {"role": "side", "label": "SIDE"},
+    {"role": "top", "label": "TOP"},
+    {"role": "end", "label": "END"},
     {"role": "iso", "label": "ISOMETRIC"},
+    {"role": "flat", "label": "FLAT PATTERN"},
 ]
 
-CHAIN_FIELDS = [
-    {"key": "project", "label": "PROJECT / REF"},
-    {"key": "construction", "label": "CONSTRUCTION MATERIAL"},
-    {"key": "head", "label": "HEAD CONSTRUCTION"},
-    {"key": "tail", "label": "TAIL CONSTRUCTION"},
+SIGNOFF_VIEWS = [
+    {"role": "side", "label": "SIDE ELEVATION"},
+    {"role": "front", "label": "FRONT"},
+    {"role": "section", "label": "SECTION A-A"},
+    {"role": "inlet", "label": "INLET FLANGE"},
+    {"role": "discharge", "label": "DISCHARGE FLANGE"},
 ]
 
-UTROUGH_FIELDS = [
-    {"key": "diameter", "label": "TROUGH DIAMETER"},
-    {"key": "capacity", "label": "CAPACITY"},
-    {"key": "speed", "label": "SCREW SPEED"},
-    {"key": "construction", "label": "CONSTRUCTION MATERIAL"},
-    {"key": "cover", "label": "COVER"},
-]
+STANDARD_NOTES = (
+    "Standard drawing. A part uses front, side, and isometric, plus a flat view when it has bends. "
+    "Dimension overall height and width, and thickness where it is easiest to see. "
+    "Do not dimension laser cut-outs that are also in the DXF. "
+    "An assembly uses as many views as production needs, with overall height, width, and depth, "
+    "and a parts list with balloons in the top left. "
+    "A weldment adds weld symbols on the clearest view."
+)
 
-ELEVATOR_FIELDS = [
-    {"key": "capacity", "label": "CAPACITY"},
-    {"key": "belt", "label": "BELT SPEED"},
-    {"key": "bucket", "label": "BUCKET"},
-    {"key": "casing", "label": "CASING"},
-    {"key": "head", "label": "HEAD PULLEY"},
-    {"key": "boot", "label": "BOOT PULLEY"},
-]
+SIGNOFF_NOTES = (
+    "Sign off sheet. Side elevation with overall length and height, discharge height, and each section length. "
+    "Front view, an end cross-section of the ordered height and width, and face views of the inlet and discharge "
+    "with flange size and the opening. Customer, order number, quote number, signature, and date sit in the lower left."
+)
+
+OFFICIAL_IDS = ("standard-idw", "standard-dwg", "signoff")
 
 
-def _template(template_id, name, drawing_type, applies_to, width, height, label, company, views, table, notes, fields=None, default_views=None):
+def _template(template_id, name, drawing_type, applies_to, width, height, label, views, table, notes, fields=None, default_views=None):
     return {
         "id": template_id,
         "name": name,
@@ -78,7 +73,7 @@ def _template(template_id, name, drawing_type, applies_to, width, height, label,
         "sheet_height_in": height,
         "sheet_label": label,
         "body": {
-            "company": company,
+            "company": dict(COMPANY),
             "views": views,
             "default_views": default_views or [view["role"] for view in views],
             "table": table,
@@ -90,103 +85,29 @@ def _template(template_id, name, drawing_type, applies_to, width, height, label,
 
 TEMPLATES = [
     _template(
-        "norstar-part", "Norstar part", "part", "ipt", 17, 11, "B", NORSTAR, PART_VIEWS,
-        {"kind": "bend", "title": "TABLE", "columns": BEND_COLUMNS},
-        "Flat parts: side, front, isometric, and a flat view when the part has bends. "
-        "Dimension overall height and width on the side, the front, and the flat. "
-        "Dimension thickness where it is easiest to see. Laser cut-outs that are in the DXF stay undimensioned. "
-        "Bend lines, bend IDs, and a bend table are required when the part is formed. Direction up whenever possible.",
+        "standard-idw", "Standard.idw", "standard", "both", 17, 11, "B", STANDARD_VIEWS,
+        {"kind": "auto"},
+        STANDARD_NOTES,
+        default_views=["front", "side", "iso"],
     ),
     _template(
-        "norstar-weldment", "Norstar weldment", "weldment", "iam", 22, 17, "C", NORSTAR,
-        [
-            {"role": "side", "label": "SIDE"},
-            {"role": "end", "label": "END"},
-            {"role": "detail", "label": "DETAIL A"},
-            {"role": "iso", "label": "ISOMETRIC"},
-            {"role": "top", "label": "TOP"},
-        ],
-        {"kind": "parts", "title": "Parts List"},
-        "Use as many views as production needs. Dimension overall height, width, and depth. "
-        "Dimension where parts meet, from the end of one part to the first face of the next. "
-        "Use baseline dimensions when several parts sit on a long base. "
-        "Put weld symbols on the view that points at the joint most clearly. "
-        "Parts list in the top left, with a balloon for every item.",
-        default_views=["side", "end", "detail", "iso"],
+        "standard-dwg", "Standard.dwg", "standard", "both", 17, 11, "B", STANDARD_VIEWS,
+        {"kind": "auto"},
+        STANDARD_NOTES,
+        default_views=["front", "side", "iso"],
     ),
     _template(
-        "norstar-assembly", "Norstar assembly", "assembly", "iam", 22, 17, "C", NORSTAR,
-        [
-            {"role": "side", "label": "SIDE"},
-            {"role": "top", "label": "TOP"},
-            {"role": "end", "label": "END"},
-            {"role": "iso", "label": "ISOMETRIC"},
-            {"role": "front", "label": "FRONT"},
-        ],
-        {"kind": "parts", "title": "Parts List"},
-        "Use as many views as production needs. Dimension overall height, width, and depth. "
-        "Parts list in the top left, with a balloon for every item. "
-        "Part number and description go in the title block.",
-        default_views=["side", "top", "end", "iso"],
-    ),
-    _template(
-        "norstar-signoff", "Norstar signoff — chain conveyor", "signoff", "iam", 34, 22, "D", NORSTAR,
-        [
-            {"role": "side", "label": "SIDE ELEVATION"},
-            {"role": "front", "label": "FRONT"},
-            {"role": "section", "label": "SECTION A-A"},
-            {"role": "inlet", "label": "INLET FLANGE"},
-            {"role": "discharge", "label": "DISCHARGE FLANGE"},
-        ],
+        "signoff", "Sign off", "signoff", "both", 34, 22, "D", SIGNOFF_VIEWS,
         {"kind": "signoff"},
-        "Side view with overall length, overall height, discharge height, and each section length labeled. "
-        "Front view, end cross-section dimensioned for ordered height and width, and face views of the inlet and discharge "
-        "showing flange size and the opening. Customer, order number, quote number, signature, and date sit in the lower left, "
-        "plus the unit lines for this conveyor.",
-        fields=CHAIN_FIELDS,
-    ),
-    _template(
-        "meridian-part", "Meridian part", "part", "ipt", 17, 11, "B", MERIDIAN, PART_VIEWS,
-        {"kind": "bend", "title": "TABLE", "columns": BEND_COLUMNS},
-        "Same part-drawing rules as the shop SOP. Swap the title block if Meridian uses a different tolerance block.",
-    ),
-    _template(
-        "meridian-signoff-utrough", "Meridian signoff — u-trough", "signoff", "iam", 34, 22, "D", MERIDIAN,
-        [
-            {"role": "side", "label": "SIDE ELEVATION"},
-            {"role": "section", "label": "SECTION A-A"},
-            {"role": "inlet", "label": "INLET FLANGE"},
-            {"role": "discharge", "label": "DISCHARGE FLANGE"},
-            {"role": "front", "label": "FRONT"},
-        ],
-        {"kind": "signoff"},
-        "U-trough signoff. Side elevation with section lengths, end cross-section for ordered size, inlet and discharge faces. "
-        "Customer block includes trough diameter, capacity, screw speed, material, and cover.",
-        fields=UTROUGH_FIELDS,
-        default_views=["side", "section", "inlet", "discharge"],
-    ),
-    _template(
-        "meridian-signoff-elevator", "Meridian signoff — bucket elevator", "signoff", "iam", 34, 22, "D", MERIDIAN,
-        [
-            {"role": "side", "label": "SIDE ELEVATION"},
-            {"role": "section", "label": "SECTION A-A"},
-            {"role": "inlet", "label": "INLET"},
-            {"role": "discharge", "label": "DISCHARGE"},
-            {"role": "front", "label": "FRONT"},
-        ],
-        {"kind": "signoff"},
-        "Bucket elevator signoff. Side elevation with boot, leg, and head labeled and dimensioned. "
-        "End cross-section confirms casing size. Inlet and discharge faces show the opening. "
-        "A long leg may be drawn broken, with the true length in the dimension.",
-        fields=ELEVATOR_FIELDS,
-        default_views=["side", "section", "inlet", "discharge"],
+        SIGNOFF_NOTES,
+        default_views=["side", "front", "section", "inlet", "discharge"],
     ),
 ]
 
 BOM_FORMATS = [
     {
-        "id": "norstar-parts-list",
-        "name": "Norstar parts list",
+        "id": "parts-list",
+        "name": "Parts list",
         "is_default": 1,
         "body": {
             "title": "Parts List",
@@ -204,12 +125,21 @@ BOM_FORMATS = [
 
 
 def seed_if_empty() -> None:
-    now = datetime.now(timezone.utc).isoformat()
+    install_shop_templates()
+
+
+def install_shop_templates() -> None:
+    timestamp = datetime.now(timezone.utc).isoformat()
     with connect() as conn:
-        count = conn.execute("SELECT COUNT(*) AS n FROM templates").fetchone()["n"]
-        if count:
-            return
+        _install_formats(conn, timestamp)
+        conn.execute(
+            f"DELETE FROM templates WHERE id NOT IN ({','.join('?' for _ in OFFICIAL_IDS)})",
+            OFFICIAL_IDS,
+        )
+        have = {row["id"] for row in conn.execute("SELECT id FROM templates")}
         for template in TEMPLATES:
+            if template["id"] in have:
+                continue
             conn.execute(
                 """
                 INSERT INTO templates
@@ -219,11 +149,83 @@ def seed_if_empty() -> None:
                 (
                     template["id"], template["name"], template["drawing_type"], template["applies_to"],
                     template["sheet_width_in"], template["sheet_height_in"], template["sheet_label"],
-                    dumps(template["body"]), now,
+                    dumps(template["body"]), timestamp,
                 ),
             )
-        for fmt in BOM_FORMATS:
+        conn.execute(
+            """
+            UPDATE jobs SET template_id = 'signoff'
+            WHERE template_id NOT IN ('standard-idw', 'standard-dwg', 'signoff')
+              AND template_id LIKE '%signoff%'
+            """
+        )
+        conn.execute(
+            """
+            UPDATE jobs SET template_id = 'standard-idw'
+            WHERE template_id NOT IN ('standard-idw', 'standard-dwg', 'signoff')
+            """
+        )
+        conn.execute("DELETE FROM jobs WHERE sample = 1")
+        _retire_false_sheets(conn, timestamp)
+
+
+def _install_formats(conn, timestamp: str) -> None:
+    old = conn.execute("SELECT id FROM bom_formats WHERE id = 'norstar-parts-list'").fetchone()
+    current = conn.execute("SELECT id FROM bom_formats WHERE id = 'parts-list'").fetchone()
+    if old and not current:
+        conn.execute(
+            "UPDATE bom_formats SET id = 'parts-list', name = 'Parts list' WHERE id = 'norstar-parts-list'"
+        )
+        conn.execute("UPDATE jobs SET bom_format_id = 'parts-list' WHERE bom_format_id = 'norstar-parts-list'")
+    elif old and current:
+        conn.execute("DELETE FROM bom_formats WHERE id = 'norstar-parts-list'")
+        conn.execute("UPDATE jobs SET bom_format_id = 'parts-list' WHERE bom_format_id = 'norstar-parts-list'")
+    elif not current:
+        fmt = BOM_FORMATS[0]
+        conn.execute(
+            "INSERT INTO bom_formats (id, name, is_default, body_json, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (fmt["id"], fmt["name"], fmt["is_default"], dumps(fmt["body"]), timestamp),
+        )
+    for row in conn.execute("SELECT id, name FROM bom_formats"):
+        lowered = (row["name"] or "").lower()
+        if "norstar" in lowered or "meridian" in lowered:
+            conn.execute("UPDATE bom_formats SET name = 'Parts list' WHERE id = ?", (row["id"],))
+
+
+def _branded(text: str) -> bool:
+    lowered = (text or "").lower()
+    return "norstar" in lowered or "meridian" in lowered
+
+
+def _retire_false_sheets(conn, timestamp: str) -> None:
+    rows = conn.execute("SELECT id, source_name, properties_json, snapshot_json FROM jobs").fetchall()
+    for row in rows:
+        props = loads(row["properties_json"], {})
+        cleaned = sanitize_properties(props, row["source_name"] or "")
+        snapshot = loads(row["snapshot_json"], None)
+        drop_snapshot = False
+        if isinstance(snapshot, dict):
+            company = ((snapshot.get("template") or {}).get("company") or {})
+            blob = " ".join(str(company.get(key) or "") for key in ("name", "sub", "proprietary", "productSeries"))
+            dirty = any(
+                value not in (None, "") and not acceptable_property(value)
+                for value in (props or {}).values()
+                if isinstance(value, str)
+            )
+            drop_snapshot = _branded(blob) or dirty
+        if cleaned != props or drop_snapshot:
             conn.execute(
-                "INSERT INTO bom_formats (id, name, is_default, body_json, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (fmt["id"], fmt["name"], fmt["is_default"], dumps(fmt["body"]), now),
+                """
+                UPDATE jobs
+                SET properties_json = ?, snapshot_json = ?, sop_json = NULL,
+                    status = CASE WHEN ? THEN 'draft' ELSE status END, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    dumps(cleaned),
+                    None if drop_snapshot else row["snapshot_json"],
+                    1 if drop_snapshot else 0,
+                    timestamp,
+                    row["id"],
+                ),
             )
