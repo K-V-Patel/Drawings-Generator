@@ -13,6 +13,9 @@
 ' It also writes a .drawgen.json of those view curves. Drop that file on
 ' Drawings Generator when you want the same views in the browser.
 ' This machine cannot open an .idw. Inventor has to project the model.
+'
+' iLogic misreads a quote typed inside a string, so every quote is Chr(34).
+' It also misreads the circle functions on Math, so circles use SineOf.
 
 Imports System.Text
 Imports System.Collections.Generic
@@ -302,37 +305,100 @@ Function WriteCurves(model As Document, views As Dictionary(Of String, DrawingVi
     For Each pair As KeyValuePair(Of String, DrawingView) In views
         If Not firstView Then viewBody.Append(",")
         firstView = False
-        Dim withDims As Boolean = pair.Key <> "iso"
-        viewBody.Append("""" & pair.Key & """:" & FormatView(pair.Value, withDims, culture))
+        Dim includeDims As Boolean = True
+        If pair.Key = "iso" Then includeDims = False
+        Dim oneView As String = FormatView(pair.Value, includeDims, culture)
+        viewBody.Append(Quoted(pair.Key))
+        viewBody.Append(":")
+        viewBody.Append(oneView)
     Next
     Dim bom As String = ""
     If fileKind = "iam" Then bom = BomJson(model)
-    Dim json As String = "{" & _
-        """schema"":""drawgen/1""," & _
-        """fileName"":""" & J(System.IO.Path.GetFileName(model.FullFileName)) & """," & _
-        """fileKind"":""" & fileKind & """," & _
-        """selectedViews"":[""front"",""top"",""side"",""iso""]," & _
-        """properties"":{" & _
-            """partNumber"":""" & J(Prop(model, "Design Tracking Properties", "Part Number")) & """," & _
-            """description"":""" & J(Prop(model, "Design Tracking Properties", "Description")) & """," & _
-            """material"":""" & J(Prop(model, "Design Tracking Properties", "Material")) & """," & _
-            """designer"":""" & J(Prop(model, "Design Tracking Properties", "Designer")) & """," & _
-            """drawnBy"":""" & J(Prop(model, "Inventor Summary Information", "Author")) & """," & _
-            """scale"":""SEE ABOVE""" & _
-        "}," & _
-        """model"":{" & _
-            """kind"":""" & modelKind & """," & _
-            """overall"":{""length"":" & lengthIn.ToString("0.###", culture) & ",""width"":" & widthIn.ToString("0.###", culture) & ",""height"":" & heightIn.ToString("0.###", culture) & "}," & _
-            """bends"":[]," & _
-            """components"":[" & bom & "]," & _
-            """views"":{" & viewBody.ToString() & "}" & _
-        "}" & _
-    "}"
-    System.IO.File.WriteAllText(path, json, New UTF8Encoding(False))
+    Dim json As New StringBuilder()
+    json.Append("{")
+    json.Append(Quoted("schema"))
+    json.Append(":")
+    json.Append(Quoted("drawgen/1"))
+    json.Append(",")
+    json.Append(Quoted("fileName"))
+    json.Append(":")
+    json.Append(Quoted(System.IO.Path.GetFileName(model.FullFileName)))
+    json.Append(",")
+    json.Append(Quoted("fileKind"))
+    json.Append(":")
+    json.Append(Quoted(fileKind))
+    json.Append(",")
+    json.Append(Quoted("selectedViews"))
+    json.Append(":[")
+    json.Append(Quoted("front"))
+    json.Append(",")
+    json.Append(Quoted("top"))
+    json.Append(",")
+    json.Append(Quoted("side"))
+    json.Append(",")
+    json.Append(Quoted("iso"))
+    json.Append("],")
+    json.Append(Quoted("properties"))
+    json.Append(":{")
+    json.Append(Quoted("partNumber"))
+    json.Append(":")
+    json.Append(Quoted(Prop(model, "Design Tracking Properties", "Part Number")))
+    json.Append(",")
+    json.Append(Quoted("description"))
+    json.Append(":")
+    json.Append(Quoted(Prop(model, "Design Tracking Properties", "Description")))
+    json.Append(",")
+    json.Append(Quoted("material"))
+    json.Append(":")
+    json.Append(Quoted(Prop(model, "Design Tracking Properties", "Material")))
+    json.Append(",")
+    json.Append(Quoted("designer"))
+    json.Append(":")
+    json.Append(Quoted(Prop(model, "Design Tracking Properties", "Designer")))
+    json.Append(",")
+    json.Append(Quoted("drawnBy"))
+    json.Append(":")
+    json.Append(Quoted(Prop(model, "Inventor Summary Information", "Author")))
+    json.Append(",")
+    json.Append(Quoted("scale"))
+    json.Append(":")
+    json.Append(Quoted("SEE ABOVE"))
+    json.Append("},")
+    json.Append(Quoted("model"))
+    json.Append(":{")
+    json.Append(Quoted("kind"))
+    json.Append(":")
+    json.Append(Quoted(modelKind))
+    json.Append(",")
+    json.Append(Quoted("overall"))
+    json.Append(":{")
+    json.Append(Quoted("length"))
+    json.Append(":")
+    json.Append(Num(lengthIn, culture))
+    json.Append(",")
+    json.Append(Quoted("width"))
+    json.Append(":")
+    json.Append(Num(widthIn, culture))
+    json.Append(",")
+    json.Append(Quoted("height"))
+    json.Append(":")
+    json.Append(Num(heightIn, culture))
+    json.Append("},")
+    json.Append(Quoted("bends"))
+    json.Append(":[],")
+    json.Append(Quoted("components"))
+    json.Append(":[")
+    json.Append(bom)
+    json.Append("],")
+    json.Append(Quoted("views"))
+    json.Append(":{")
+    json.Append(viewBody.ToString())
+    json.Append("}}}")
+    System.IO.File.WriteAllText(path, json.ToString(), New UTF8Encoding(False))
     Return "Curves: " & path
 End Function
 
-Function FormatView(view As DrawingView, withDims As Boolean, culture As System.Globalization.CultureInfo) As String
+Function FormatView(view As DrawingView, includeDims As Boolean, culture As System.Globalization.CultureInfo) As String
     Dim paths As New StringBuilder()
     Dim first As Boolean = True
     Dim minX As Double = 1.0E+30
@@ -356,25 +422,78 @@ Function FormatView(view As DrawingView, withDims As Boolean, culture As System.
             layer = "HIDDEN"
             dashed = "true"
         End If
-        paths.Append("{""pts"":[")
-        For i As Integer = 0 To pts.Count - 1
+        paths.Append("{")
+        paths.Append(Quoted("pts"))
+        paths.Append(":[")
+        Dim i As Integer = 0
+        Do While i < pts.Count
             Dim local() As Double = ModelInches(view, pts(i))
             If i > 0 Then paths.Append(",")
-            paths.Append("[" & local(0).ToString("0.###", culture) & "," & local(1).ToString("0.###", culture) & "]")
+            paths.Append("[")
+            paths.Append(Num(local(0), culture))
+            paths.Append(",")
+            paths.Append(Num(local(1), culture))
+            paths.Append("]")
             minX = Math.Min(minX, local(0))
             minY = Math.Min(minY, local(1))
             maxX = Math.Max(maxX, local(0))
             maxY = Math.Max(maxY, local(1))
-            count += 1
-        Next
-        paths.Append("],""layer"":""" & layer & """,""dashed"":" & dashed & "}")
+            count = count + 1
+            i = i + 1
+        Loop
+        paths.Append("],")
+        paths.Append(Quoted("layer"))
+        paths.Append(":")
+        paths.Append(Quoted(layer))
+        paths.Append(",")
+        paths.Append(Quoted("dashed"))
+        paths.Append(":")
+        paths.Append(dashed)
+        paths.Append("}")
     Next
     Dim dims As String = ""
-    If withDims AndAlso count > 0 AndAlso maxX > minX AndAlso maxY > minY Then
-        dims = "{""kind"":""horizontal"",""x1"":" & minX.ToString("0.###", culture) & ",""x2"":" & maxX.ToString("0.###", culture) & ",""y"":" & minY.ToString("0.###", culture) & ",""text"":""" & (maxX - minX).ToString("0.###", culture) & """}," & _
-               "{""kind"":""vertical"",""y1"":" & minY.ToString("0.###", culture) & ",""y2"":" & maxY.ToString("0.###", culture) & ",""x"":" & minX.ToString("0.###", culture) & ",""text"":""" & (maxY - minY).ToString("0.###", culture) & """}"
+    If includeDims AndAlso count > 0 AndAlso maxX > minX AndAlso maxY > minY Then
+        Dim across As String = AxisDim("horizontal", "x1", minX, "x2", maxX, "y", minY, maxX - minX, culture)
+        Dim upward As String = AxisDim("vertical", "y1", minY, "y2", maxY, "x", minX, maxY - minY, culture)
+        dims = across & "," & upward
     End If
-    Return "{""paths"":[" & paths.ToString() & "],""dims"":[" & dims & "]}"
+    Dim result As New StringBuilder()
+    result.Append("{")
+    result.Append(Quoted("paths"))
+    result.Append(":[")
+    result.Append(paths.ToString())
+    result.Append("],")
+    result.Append(Quoted("dims"))
+    result.Append(":[")
+    result.Append(dims)
+    result.Append("]}")
+    Return result.ToString()
+End Function
+
+Function AxisDim(kind As String, aKey As String, aValue As Double, bKey As String, bValue As Double, cKey As String, cValue As Double, span As Double, culture As System.Globalization.CultureInfo) As String
+    Dim item As New StringBuilder()
+    item.Append("{")
+    item.Append(Quoted("kind"))
+    item.Append(":")
+    item.Append(Quoted(kind))
+    item.Append(",")
+    item.Append(Quoted(aKey))
+    item.Append(":")
+    item.Append(Num(aValue, culture))
+    item.Append(",")
+    item.Append(Quoted(bKey))
+    item.Append(":")
+    item.Append(Num(bValue, culture))
+    item.Append(",")
+    item.Append(Quoted(cKey))
+    item.Append(":")
+    item.Append(Num(cValue, culture))
+    item.Append(",")
+    item.Append(Quoted("text"))
+    item.Append(":")
+    item.Append(Quoted(Num(span, culture)))
+    item.Append("}")
+    Return item.ToString()
 End Function
 
 Function CurvePoints(curve As DrawingCurve) As List(Of Point2d)
@@ -388,10 +507,7 @@ Function CurvePoints(curve As DrawingCurve) As List(Of Point2d)
         If kind.Contains("Circle") AndAlso Not kind.Contains("Arc") Then
             Dim center As Point2d = curve.CenterPoint
             Dim radius As Double = center.DistanceTo(curve.StartPoint)
-            For pointIndex As Integer = 0 To 16
-                Dim angle As Double = 2 * Math.PI * pointIndex / 16
-                pts.Add(ThisApplication.TransientGeometry.CreatePoint2d(center.X + radius * Math.Cos(angle), center.Y + radius * Math.Sin(angle)))
-            Next
+            AddArcSamples(pts, center, radius, 0, 2 * HalfTurn(), 16)
             Return pts
         End If
         If kind.Contains("Arc") OrElse kind.Contains("Ellipse") OrElse kind.Contains("Spline") OrElse kind.Contains("BSpline") Then
@@ -407,10 +523,7 @@ Function CurvePoints(curve As DrawingCurve) As List(Of Point2d)
                 Dim midA As Double = Math.Atan2(curve.MidPoint.Y - center.Y, curve.MidPoint.X - center.X)
                 Dim radius As Double = center.DistanceTo(curve.StartPoint)
                 Dim sweep As Double = SweepThrough(startA, endA, midA)
-                For pointIndex As Integer = 0 To 8
-                    Dim angle As Double = startA + sweep * pointIndex / 8
-                    pts.Add(ThisApplication.TransientGeometry.CreatePoint2d(center.X + radius * Math.Cos(angle), center.Y + radius * Math.Sin(angle)))
-                Next
+                AddArcSamples(pts, center, radius, startA, sweep, 8)
                 Return pts
             End If
         End If
@@ -425,23 +538,66 @@ Function CurvePoints(curve As DrawingCurve) As List(Of Point2d)
 End Function
 
 Function SweepThrough(startA As Double, endA As Double, midA As Double) As Double
+    Dim turn As Double = 2 * HalfTurn()
     Dim forward As Double = endA - startA
     Do While forward <= 0
-        forward += 2 * Math.PI
+        forward = forward + turn
     Loop
-    Do While forward > 2 * Math.PI
-        forward -= 2 * Math.PI
+    Do While forward > turn
+        forward = forward - turn
     Loop
-    Dim back As Double = forward - 2 * Math.PI
+    Dim back As Double = forward - turn
     Dim midForward As Double = midA - startA
     Do While midForward < 0
-        midForward += 2 * Math.PI
+        midForward = midForward + turn
     Loop
-    Do While midForward > 2 * Math.PI
-        midForward -= 2 * Math.PI
+    Do While midForward > turn
+        midForward = midForward - turn
     Loop
     If midForward <= forward + 0.01 Then Return forward
     Return back
+End Function
+
+Sub AddArcSamples(pts As List(Of Point2d), center As Point2d, radius As Double, startAngle As Double, sweepAngle As Double, count As Integer)
+    Dim k As Integer = 0
+    Do While k <= count
+        Dim angle As Double = startAngle + sweepAngle * k / CDbl(count)
+        Dim px As Double = center.X + radius * CosineOf(angle)
+        Dim py As Double = center.Y + radius * SineOf(angle)
+        Dim sample As Point2d = ThisApplication.TransientGeometry.CreatePoint2d(px, py)
+        pts.Add(sample)
+        k = k + 1
+    Loop
+End Sub
+
+Function HalfTurn() As Double
+    Return 3.14159265358979
+End Function
+
+Function SineOf(angle As Double) As Double
+    Dim p As Double = HalfTurn()
+    Dim turn As Double = 2 * p
+    Dim reduced As Double = angle
+    Do While reduced > p
+        reduced = reduced - turn
+    Loop
+    Do While reduced < -p
+        reduced = reduced + turn
+    Loop
+    Dim term As Double = reduced
+    Dim sum As Double = reduced
+    Dim n As Integer = 1
+    Do While n <= 10
+        Dim denom As Double = (2 * n) * (2 * n + 1)
+        term = -term * reduced * reduced / denom
+        sum = sum + term
+        n = n + 1
+    Loop
+    Return sum
+End Function
+
+Function CosineOf(angle As Double) As Double
+    Return SineOf(angle + HalfTurn() / 2)
 End Function
 
 Function ModelInches(view As DrawingView, point As Point2d) As Double()
@@ -462,7 +618,23 @@ Function BomJson(model As Document) As String
         index += 1
         Dim itemNo As String = CStr(row.ItemNumber)
         If itemNo = "" Then itemNo = index.ToString()
-        bom.Append("{""item"":""" & J(itemNo) & """,""partNumber"":""" & J(Prop(child, "Design Tracking Properties", "Part Number")) & """,""description"":""" & J(Prop(child, "Design Tracking Properties", "Description")) & """,""qty"":""" & J(CStr(row.ItemQuantity)) & """}")
+        bom.Append("{")
+        bom.Append(Quoted("item"))
+        bom.Append(":")
+        bom.Append(Quoted(itemNo))
+        bom.Append(",")
+        bom.Append(Quoted("partNumber"))
+        bom.Append(":")
+        bom.Append(Quoted(Prop(child, "Design Tracking Properties", "Part Number")))
+        bom.Append(",")
+        bom.Append(Quoted("description"))
+        bom.Append(":")
+        bom.Append(Quoted(Prop(child, "Design Tracking Properties", "Description")))
+        bom.Append(",")
+        bom.Append(Quoted("qty"))
+        bom.Append(":")
+        bom.Append(Quoted(CStr(row.ItemQuantity)))
+        bom.Append("}")
     Next
     Return bom.ToString()
 End Function
@@ -506,7 +678,22 @@ Function Prop(doc As Document, setName As String, propName As String) As String
     End Try
 End Function
 
-Function J(value As String) As String
+Function Quoted(value As String) As String
+    Return Chr(34) & JsonEscape(value) & Chr(34)
+End Function
+
+Function JsonEscape(value As String) As String
     If value Is Nothing Then Return ""
-    Return value.Replace("\", "\\").Replace("""", "\""").Replace(vbCr, " ").Replace(vbLf, " ")
+    Dim slash As String = Chr(92)
+    Dim mark As String = Chr(34)
+    Dim cleaned As String = value
+    cleaned = cleaned.Replace(slash, slash & slash)
+    cleaned = cleaned.Replace(mark, slash & mark)
+    cleaned = cleaned.Replace(vbCr, " ")
+    cleaned = cleaned.Replace(vbLf, " ")
+    Return cleaned
+End Function
+
+Function Num(value As Double, culture As System.Globalization.CultureInfo) As String
+    Return value.ToString("0.###", culture)
 End Function
