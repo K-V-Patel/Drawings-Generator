@@ -7,7 +7,7 @@
 ' stay aligned. The isometric view uses the model Home view. Overall
 ' dimensions are added on the orthographic views.
 ' An assembly also gets a parts list. When it has more than one part,
-' each part gets a balloon beside that part on the isometric view.
+' each part gets a balloon close beside that part on the isometric view.
 ' Item numbers are not stacked in order.
 '
 ' The drawing is saved as the part number .idw in the sibling Drawing
@@ -416,33 +416,33 @@ Function ColumnStart(sheet As Sheet, host As DrawingView, pitch As Double, count
 End Function
 
 Function PlaceNearBalloons(sheet As Sheet, host As DrawingView, targets As List(Of ComponentOccurrence), tg As TransientGeometry, ByRef placed As Integer, missed As List(Of ComponentOccurrence)) As String
-    Dim leftOcc As New List(Of ComponentOccurrence)
-    Dim leftY As New List(Of Double)
-    Dim rightOcc As New List(Of ComponentOccurrence)
-    Dim rightY As New List(Of Double)
+    Dim occs As New List(Of ComponentOccurrence)
+    Dim tipX As New List(Of Double)
+    Dim tipY As New List(Of Double)
     Dim problem As String = ""
     For Each occ As ComponentOccurrence In targets
-        Dim anchor As Point2d = PartAnchor(host, occ)
-        If anchor Is Nothing Then
+        Dim edge As Point2d = OuterEdge(host, occ)
+        If edge Is Nothing Then
             missed.Add(occ)
         Else
-            Dim midX As Double = 0
-            If host.Position IsNot Nothing Then midX = host.Position.X
-            If anchor.X >= midX Then
-                rightOcc.Add(occ)
-                rightY.Add(anchor.Y)
-            Else
-                leftOcc.Add(occ)
-                leftY.Add(anchor.Y)
-            End If
+            Dim spot As Point2d = TipBeside(sheet, host, edge)
+            occs.Add(occ)
+            tipX.Add(spot.X)
+            tipY.Add(spot.Y)
         End If
     Next
-    Dim low As Double = 2.0
-    Dim high As Double = sheet.Height - 2.0
-    SpreadYs(leftY, 1.55, low, high)
-    SpreadYs(rightY, 1.55, low, high)
-    problem = PlaceSide(sheet, host, leftOcc, leftY, tg, False, placed, missed, problem)
-    problem = PlaceSide(sheet, host, rightOcc, rightY, tg, True, placed, missed, problem)
+    NudgeApart(host, tipX, tipY, 1.35)
+    Dim index As Integer = 0
+    Do While index < occs.Count
+        Dim note As String = PlaceOneNear(sheet, host, occs(index), tg, tipX(index), tipY(index))
+        index = index + 1
+        If note = "" Then
+            placed = placed + 1
+        Else
+            problem = note
+            missed.Add(occs(index - 1))
+        End If
+    Loop
     Return problem
 End Function
 
@@ -476,6 +476,91 @@ Function PlaceOneNear(sheet As Sheet, host As DrawingView, occ As ComponentOccur
     Loop
     Return lastProblem
 End Function
+
+Function OuterEdge(host As DrawingView, occ As ComponentOccurrence) As Point2d
+    Dim curves As List(Of DrawingCurve) = CurvesForPart(host, occ)
+    Dim best As Point2d = Nothing
+    Dim bestScore As Double = -1
+    Dim cx As Double = 0
+    Dim cy As Double = 0
+    If host.Position IsNot Nothing Then
+        cx = host.Position.X
+        cy = host.Position.Y
+    End If
+    Dim index As Integer = 0
+    Dim span As Integer = curves.Count
+    If span > 60 Then span = 60
+    Do While index < span
+        Dim mid As Point2d = PointOnCurve(curves(index))
+        index = index + 1
+        If mid Is Nothing Then Continue Do
+        Dim dx As Double = mid.X - cx
+        Dim dy As Double = mid.Y - cy
+        Dim score As Double = dx * dx + dy * dy
+        If score > bestScore Then
+            bestScore = score
+            best = mid
+        End If
+    Loop
+    Return best
+End Function
+
+Function TipBeside(sheet As Sheet, host As DrawingView, edge As Point2d) As Point2d
+    Dim cx As Double = edge.X
+    Dim cy As Double = edge.Y
+    If host.Position IsNot Nothing Then
+        cx = host.Position.X
+        cy = host.Position.Y
+    End If
+    Dim dx As Double = edge.X - cx
+    Dim dy As Double = edge.Y - cy
+    Dim ax As Double = Math.Abs(dx)
+    Dim ay As Double = Math.Abs(dy)
+    Dim span As Double = ax
+    If ay > span Then span = ay
+    If span < 0.05 Then span = 0.05
+    Dim reach As Double = 1.15
+    Dim tipX As Double = edge.X + dx / span * reach
+    Dim tipY As Double = edge.Y + dy / span * reach
+    Dim margin As Double = 1.2
+    If tipX < margin Then tipX = margin
+    If tipY < margin Then tipY = margin
+    If tipX > sheet.Width - margin Then tipX = sheet.Width - margin
+    If tipY > sheet.Height - margin Then tipY = sheet.Height - margin
+    Return ThisApplication.TransientGeometry.CreatePoint2d(tipX, tipY)
+End Function
+
+Sub NudgeApart(host As DrawingView, xs As List(Of Double), ys As List(Of Double), gap As Double)
+    If host Is Nothing OrElse host.Position Is Nothing Then Return
+    Dim guard As Integer = 0
+    Do While guard < 6
+        guard = guard + 1
+        Dim moved As Boolean = False
+        Dim i As Integer = 0
+        Do While i < xs.Count
+            Dim j As Integer = i + 1
+            Do While j < xs.Count
+                Dim dx As Double = xs(j) - xs(i)
+                Dim dy As Double = ys(j) - ys(i)
+                If dx * dx + dy * dy < gap * gap Then
+                    Dim ox As Double = xs(j) - host.Position.X
+                    Dim oy As Double = ys(j) - host.Position.Y
+                    Dim ax As Double = Math.Abs(ox)
+                    Dim ay As Double = Math.Abs(oy)
+                    Dim scale As Double = ax
+                    If ay > scale Then scale = ay
+                    If scale < 0.05 Then scale = 0.05
+                    xs(j) = xs(j) + ox / scale * 0.45
+                    ys(j) = ys(j) + oy / scale * 0.45
+                    moved = True
+                End If
+                j = j + 1
+            Loop
+            i = i + 1
+        Loop
+        If Not moved Then Exit Do
+    Loop
+End Sub
 
 Function PartAnchor(host As DrawingView, occ As ComponentOccurrence) As Point2d
     Dim curves As List(Of DrawingCurve) = CurvesForPart(host, occ)
@@ -871,7 +956,7 @@ End Function
 Function LeaderElbow(tip As Point2d, attach As Point2d) As Point2d
     If tip Is Nothing OrElse attach Is Nothing Then Return Nothing
     ' Short horizontal shoulder so the balloon column stays in one line.
-    Dim shoulder As Double = 1.0
+    Dim shoulder As Double = 0.45
     Dim elbowX As Double = tip.X + shoulder
     If attach.X < tip.X Then elbowX = tip.X - shoulder
     If Math.Abs(elbowX - attach.X) < 0.3 Then Return Nothing
