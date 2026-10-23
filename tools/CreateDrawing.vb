@@ -271,6 +271,7 @@ Function AddItemBalloons(sheet As Sheet, model As Document, views As Dictionary(
         If targets.Count = 0 Then targets = DistinctOccurrences(asm)
         If occurrenceCount < 2 AndAlso targets.Count < 2 Then Return ""
         If targets.Count = 0 Then Return ""
+        ShowAssemblyParts(sheet, views)
         Dim pitch As Double = BalloonPitch(views, targets.Count)
         Dim nextY As New Dictionary(Of String, Double)
         Dim placed As Integer = 0
@@ -280,32 +281,8 @@ Function AddItemBalloons(sheet As Sheet, model As Document, views As Dictionary(
         roles.Add("front")
         roles.Add("side")
         roles.Add("top")
-        Dim host As DrawingView = Nothing
-        Dim curve As DrawingCurve = Nothing
-        Dim found As DrawingCurve = Nothing
-        Dim chosen As String = ""
         For Each occ As ComponentOccurrence In targets
-            host = Nothing
-            curve = Nothing
-            found = Nothing
-            chosen = ""
-            For Each role As String In roles
-                If Not views.ContainsKey(role) Then Continue For
-                found = CurveOnView(views(role), occ)
-                If found Is Nothing Then Continue For
-                host = views(role)
-                curve = found
-                chosen = role
-                Exit For
-            Next
-            If host Is Nothing OrElse curve Is Nothing OrElse chosen = "" Then Continue For
-            If Not nextY.ContainsKey(chosen) Then nextY(chosen) = host.Position.Y + host.Height / 2
-            Dim tipY As Double = nextY(chosen)
-            nextY(chosen) = tipY - pitch
-            Dim tipX As Double = host.Position.X + host.Width / 2 + 2.0
-            If tipX > sheet.Width - 2.0 Then tipX = sheet.Width - 2.0
-            Dim tip As Point2d = tg.CreatePoint2d(tipX, tipY)
-            Dim failure As String = PlaceBalloon(sheet, curve, tip)
+            Dim failure As String = BalloonOne(sheet, views, occ, tg, pitch, nextY, roles)
             If failure = "" Then
                 placed = placed + 1
             Else
@@ -406,57 +383,140 @@ Function PartKey(occ As ComponentOccurrence) As String
     Return ""
 End Function
 
-Function CurveOnView(view As DrawingView, occ As ComponentOccurrence) As DrawingCurve
+Sub ShowAssemblyParts(sheet As Sheet, views As Dictionary(Of String, DrawingView))
     Try
-        Dim curves As DrawingCurvesEnumerator = view.DrawingCurves(occ)
-        If curves Is Nothing Then Return Nothing
-        If curves.Count = 0 Then Return Nothing
-        Return curves.Item(1)
+        Dim drawDoc As DrawingDocument = sheet.Parent
+        For Each view As DrawingView In views.Values
+            Try
+                view.WeldmentState = WeldmentStateEnum.kAssemblyWeldmentState
+            Catch
+            End Try
+        Next
+        drawDoc.Update()
+    Catch
+    End Try
+End Sub
+
+Function BalloonOne(sheet As Sheet, views As Dictionary(Of String, DrawingView), occ As ComponentOccurrence, tg As TransientGeometry, pitch As Double, nextY As Dictionary(Of String, Double), roles As List(Of String)) As String
+    Dim lastProblem As String = "No part curve was available to attach."
+    For Each role As String In roles
+        If Not views.ContainsKey(role) Then Continue For
+        Dim host As DrawingView = views(role)
+        Dim curves As List(Of DrawingCurve) = CurvesForPart(host, occ)
+        Dim limit As Integer = curves.Count
+        If limit > 8 Then limit = 8
+        Dim index As Integer = 0
+        Do While index < limit
+            Dim curve As DrawingCurve = curves(index)
+            index = index + 1
+            Dim tip As Point2d = BalloonTip(sheet, host, role, nextY, tg)
+            Dim failure As String = PlaceBalloon(sheet, curve, tip)
+            If failure = "" Then
+                nextY(role) = nextY(role) - pitch
+                Return ""
+            End If
+            lastProblem = failure
+        Loop
+    Next
+    Return lastProblem
+End Function
+
+Function CurvesForPart(view As DrawingView, occ As ComponentOccurrence) As List(Of DrawingCurve)
+    Dim found As New List(Of DrawingCurve)
+    Try
+        Dim direct As DrawingCurvesEnumerator = view.DrawingCurves(occ)
+        If direct IsNot Nothing Then
+            For Each curve As DrawingCurve In direct
+                found.Add(curve)
+            Next
+        End If
+    Catch
+    End Try
+    If found.Count > 0 Then Return found
+    Try
+        Dim allCurves As DrawingCurvesEnumerator = view.DrawingCurves
+        If allCurves Is Nothing Then Return found
+        For Each curve As DrawingCurve In allCurves
+            If SameOccurrence(CurveOwner(curve), occ) Then found.Add(curve)
+        Next
+    Catch
+    End Try
+    Return found
+End Function
+
+Function BalloonTip(sheet As Sheet, host As DrawingView, role As String, nextY As Dictionary(Of String, Double), tg As TransientGeometry) As Point2d
+    If Not nextY.ContainsKey(role) Then
+        Dim startY As Double = host.Position.Y + host.Height / 2
+        If startY > sheet.Height - 2.0 Then startY = sheet.Height - 2.0
+        nextY(role) = startY
+    End If
+    Dim tipY As Double = nextY(role)
+    If tipY < 2.0 Then tipY = 2.0
+    Dim tipX As Double = host.Position.X - host.Width / 2 - 1.8
+    If tipX < 2.0 Then tipX = host.Position.X + host.Width / 2 + 1.8
+    If tipX > sheet.Width - 2.0 Then tipX = sheet.Width - 2.0
+    If tipX < 2.0 Then tipX = 2.0
+    Return tg.CreatePoint2d(tipX, tipY)
+End Function
+
+Function CurveOwner(curve As DrawingCurve) As ComponentOccurrence
+    Dim geom As Object = Nothing
+    Try
+        geom = curve.ModelGeometry
+    Catch
+        Return Nothing
+    End Try
+    If geom Is Nothing Then Return Nothing
+    Try
+        Dim occ As Object = CallByName(geom, "ContainingOccurrence", CallType.Get)
+        Return occ
     Catch
         Return Nothing
     End Try
 End Function
 
+Function SameOccurrence(leftOcc As ComponentOccurrence, rightOcc As ComponentOccurrence) As Boolean
+    If leftOcc Is Nothing OrElse rightOcc Is Nothing Then Return False
+    Try
+        If leftOcc Is rightOcc Then Return True
+    Catch
+    End Try
+    Try
+        If leftOcc.Name = rightOcc.Name Then Return True
+    Catch
+    End Try
+    Try
+        Return SameDefinition(leftOcc, rightOcc.Definition)
+    Catch
+        Return False
+    End Try
+End Function
+
 Function PlaceBalloon(sheet As Sheet, curve As DrawingCurve, tip As Point2d) As String
-    Dim attach As Point2d = CurvePoint(curve)
     Dim intent As GeometryIntent = Nothing
-    If attach IsNot Nothing Then
+    Try
+        intent = sheet.CreateGeometryIntent(curve)
+    Catch
+        intent = Nothing
+    End Try
+    If intent Is Nothing Then
+        Dim attach As Point2d = CurvePoint(curve)
+        If attach Is Nothing Then Return "The part curve has no attach point."
         Try
             intent = sheet.CreateGeometryIntent(curve, attach)
-        Catch
-            intent = Nothing
+        Catch ex As Exception
+            Return ex.Message
         End Try
     End If
-    If intent Is Nothing Then
-        Try
-            intent = sheet.CreateGeometryIntent(curve)
-        Catch
-            intent = Nothing
-        End Try
-    End If
+    If intent Is Nothing Then Return "The part curve has no attach point."
     Dim points As ObjectCollection = ThisApplication.TransientObjects.CreateObjectCollection()
-    If intent IsNot Nothing Then
-        points.Add(intent)
-    ElseIf attach IsNot Nothing Then
-        points.Add(attach)
-    Else
-        Return "The part curve has no attach point."
-    End If
+    points.Add(intent)
     points.Add(tip)
     Try
         sheet.Balloons.Add(points)
         Return ""
     Catch ex As Exception
-        If intent Is Nothing OrElse attach Is Nothing Then Return ex.Message
-    End Try
-    Dim retry As ObjectCollection = ThisApplication.TransientObjects.CreateObjectCollection()
-    retry.Add(attach)
-    retry.Add(tip)
-    Try
-        sheet.Balloons.Add(retry)
-        Return ""
-    Catch ex2 As Exception
-        Return ex2.Message
+        Return ex.Message
     End Try
 End Function
 
