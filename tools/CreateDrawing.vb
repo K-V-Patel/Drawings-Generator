@@ -7,7 +7,8 @@
 ' stay aligned. The isometric view uses the model Home view. Overall
 ' dimensions are added on the orthographic views.
 ' An assembly also gets a parts list. When it has more than one part,
-' each part gets one balloon in a straight column beside the isometric view.
+' each part gets a balloon beside that part on the isometric view.
+' Item numbers are not stacked in order.
 '
 ' The drawing is saved as the part number .idw in the sibling Drawing
 ' folder when that folder exists, otherwise beside the model. An existing
@@ -355,19 +356,23 @@ Function AddItemBalloons(sheet As Sheet, model As Document, views As Dictionary(
         If occurrenceCount < 2 AndAlso targets.Count < 2 Then Return ""
         If targets.Count = 0 Then Return ""
         ShowAssemblyParts(sheet, views)
-        Dim pitch As Double = BalloonPitch(sheet, views, targets.Count)
-        Dim nextY As New Dictionary(Of String, Double)
-        If views.ContainsKey("iso") Then
-            nextY("iso") = ColumnStart(sheet, views("iso"), pitch, targets.Count)
-        End If
         Dim placed As Integer = 0
         Dim problem As String = ""
+        Dim missed As New List(Of ComponentOccurrence)
+        If views.ContainsKey("iso") Then
+            problem = PlaceNearBalloons(sheet, views("iso"), targets, tg, placed, missed)
+        Else
+            For Each occ As ComponentOccurrence In targets
+                missed.Add(occ)
+            Next
+        End If
+        Dim pitch As Double = 1.6
+        Dim nextY As New Dictionary(Of String, Double)
         Dim roles As New List(Of String)
-        roles.Add("iso")
         roles.Add("front")
         roles.Add("side")
         roles.Add("top")
-        For Each occ As ComponentOccurrence In targets
+        For Each occ As ComponentOccurrence In missed
             Dim failure As String = BalloonOne(sheet, views, occ, tg, pitch, nextY, roles)
             If failure = "" Then
                 placed = placed + 1
@@ -409,6 +414,149 @@ Function ColumnStart(sheet As Sheet, host As DrawingView, pitch As Double, count
     If startY > topLimit Then startY = topLimit
     Return startY
 End Function
+
+Function PlaceNearBalloons(sheet As Sheet, host As DrawingView, targets As List(Of ComponentOccurrence), tg As TransientGeometry, ByRef placed As Integer, missed As List(Of ComponentOccurrence)) As String
+    Dim leftOcc As New List(Of ComponentOccurrence)
+    Dim leftY As New List(Of Double)
+    Dim rightOcc As New List(Of ComponentOccurrence)
+    Dim rightY As New List(Of Double)
+    Dim problem As String = ""
+    For Each occ As ComponentOccurrence In targets
+        Dim anchor As Point2d = PartAnchor(host, occ)
+        If anchor Is Nothing Then
+            missed.Add(occ)
+        Else
+            Dim midX As Double = 0
+            If host.Position IsNot Nothing Then midX = host.Position.X
+            If anchor.X >= midX Then
+                rightOcc.Add(occ)
+                rightY.Add(anchor.Y)
+            Else
+                leftOcc.Add(occ)
+                leftY.Add(anchor.Y)
+            End If
+        End If
+    Next
+    Dim low As Double = 2.0
+    Dim high As Double = sheet.Height - 2.0
+    SpreadYs(leftY, 1.55, low, high)
+    SpreadYs(rightY, 1.55, low, high)
+    problem = PlaceSide(sheet, host, leftOcc, leftY, tg, False, placed, missed, problem)
+    problem = PlaceSide(sheet, host, rightOcc, rightY, tg, True, placed, missed, problem)
+    Return problem
+End Function
+
+Function PlaceSide(sheet As Sheet, host As DrawingView, occs As List(Of ComponentOccurrence), ys As List(Of Double), tg As TransientGeometry, onRight As Boolean, ByRef placed As Integer, missed As List(Of ComponentOccurrence), problem As String) As String
+    Dim index As Integer = 0
+    Do While index < occs.Count
+        Dim tipX As Double = SideColumnX(sheet, host, onRight)
+        Dim note As String = PlaceOneNear(sheet, host, occs(index), tg, tipX, ys(index))
+        If note = "" Then
+            placed = placed + 1
+        Else
+            problem = note
+            missed.Add(occs(index))
+        End If
+        index = index + 1
+    Loop
+    Return problem
+End Function
+
+Function PlaceOneNear(sheet As Sheet, host As DrawingView, occ As ComponentOccurrence, tg As TransientGeometry, tipX As Double, tipY As Double) As String
+    Dim curves As List(Of DrawingCurve) = CurvesForPart(host, occ)
+    Dim tip As Point2d = tg.CreatePoint2d(tipX, tipY)
+    Dim order As List(Of Integer) = NearCurveOrder(curves, tip, host)
+    Dim lastProblem As String = "No part curve was available to attach."
+    Dim index As Integer = 0
+    Do While index < order.Count
+        Dim failure As String = PlaceBalloon(sheet, curves(order(index)), tip)
+        index = index + 1
+        If failure = "" Then Return ""
+        lastProblem = failure
+    Loop
+    Return lastProblem
+End Function
+
+Function PartAnchor(host As DrawingView, occ As ComponentOccurrence) As Point2d
+    Dim curves As List(Of DrawingCurve) = CurvesForPart(host, occ)
+    Dim sumX As Double = 0
+    Dim sumY As Double = 0
+    Dim count As Integer = 0
+    Dim index As Integer = 0
+    Dim span As Integer = curves.Count
+    If span > 40 Then span = 40
+    Do While index < span
+        Dim mid As Point2d = PointOnCurve(curves(index))
+        index = index + 1
+        If mid Is Nothing Then Continue Do
+        sumX = sumX + mid.X
+        sumY = sumY + mid.Y
+        count = count + 1
+    Loop
+    If count = 0 Then Return Nothing
+    Return ThisApplication.TransientGeometry.CreatePoint2d(sumX / count, sumY / count)
+End Function
+
+Function SideColumnX(sheet As Sheet, host As DrawingView, onRight As Boolean) As Double
+    Dim clearance As Double = 2.0
+    Dim margin As Double = 1.6
+    Dim columnX As Double
+    If onRight Then
+        columnX = host.Position.X + host.Width / 2 + clearance
+        If columnX > sheet.Width - margin Then columnX = sheet.Width - margin
+    Else
+        columnX = host.Position.X - host.Width / 2 - clearance
+        If columnX < margin Then columnX = margin
+    End If
+    Return columnX
+End Function
+
+Sub SpreadYs(ys As List(Of Double), pitch As Double, low As Double, high As Double)
+    If ys.Count = 0 Then Return
+    Dim order As New List(Of Integer)
+    Dim i As Integer = 0
+    Do While i < ys.Count
+        order.Add(i)
+        i = i + 1
+    Loop
+    Dim a As Integer = 0
+    Do While a < order.Count
+        Dim b As Integer = a + 1
+        Do While b < order.Count
+            If ys(order(b)) > ys(order(a)) Then
+                Dim swap As Integer = order(a)
+                order(a) = order(b)
+                order(b) = swap
+            End If
+            b = b + 1
+        Loop
+        a = a + 1
+    Loop
+    Dim placed As New List(Of Double)
+    a = 0
+    Do While a < order.Count
+        Dim y As Double = ys(order(a))
+        If y > high Then y = high
+        If y < low Then y = low
+        If placed.Count > 0 Then
+            Dim above As Double = placed(placed.Count - 1)
+            If y > above - pitch Then y = above - pitch
+        End If
+        placed.Add(y)
+        ys(order(a)) = y
+        a = a + 1
+    Loop
+    Dim lowest As Double = ys(order(order.Count - 1))
+    If lowest < low Then
+        Dim lift As Double = low - lowest
+        a = 0
+        Do While a < ys.Count
+            ys(a) = ys(a) + lift
+            If ys(a) > high Then ys(a) = high
+            a = a + 1
+        Loop
+    End If
+End Sub
 
 Function CountOccurrences(asm As AssemblyDocument) As Integer
     Dim count As Integer = 0
@@ -723,7 +871,7 @@ End Function
 Function LeaderElbow(tip As Point2d, attach As Point2d) As Point2d
     If tip Is Nothing OrElse attach Is Nothing Then Return Nothing
     ' Short horizontal shoulder so the balloon column stays in one line.
-    Dim shoulder As Double = 1.3
+    Dim shoulder As Double = 1.0
     Dim elbowX As Double = tip.X + shoulder
     If attach.X < tip.X Then elbowX = tip.X - shoulder
     If Math.Abs(elbowX - attach.X) < 0.3 Then Return Nothing
