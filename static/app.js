@@ -319,6 +319,7 @@ function bendPanel(job) {
 }
 
 function bomPanel(job) {
+  if (job.sourceKind === "ipt") return "";
   const rowsIn = job.bomRows || [];
   if (!rowsIn.length) return "";
   const format = state.formats.find((item) => item.id === job.bomFormatId) || state.formats[0];

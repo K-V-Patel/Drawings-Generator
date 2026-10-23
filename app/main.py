@@ -289,9 +289,7 @@ def _insert_job(parsed: dict) -> dict:
     for field in template.get("signoffFields") or []:
         extras.setdefault(field.get("key"), "")
     props["extras"] = extras
-    bom_rows = list(parsed.get("bomRows") or [])
-    if parsed.get("fileKind") == "iam" and not bom_rows:
-        bom_rows = []
+    bom_rows = [] if parsed.get("fileKind") == "ipt" else list(parsed.get("bomRows") or [])
     job_id = new_id()
     timestamp = now()
     with connect() as conn:
@@ -320,7 +318,9 @@ def _present(row) -> dict:
     template = _load_template(job["templateId"]) if job["templateId"] else None
     if job["sop"] is None and template:
         job["sop"] = review(_compose_template(_effective_template(template, job)), _for_rules(job))
-    job["bomReady"] = job["sourceKind"] == "iam" or (template or {}).get("table", {}).get("kind") == "parts"
+    job["bomReady"] = job["sourceKind"] == "iam"
+    if job["sourceKind"] == "ipt":
+        job["bomRows"] = []
     return job
 
 
@@ -505,7 +505,7 @@ async def update_job(job_id: str, request: Request):
     props = sanitize_properties(body.get("properties", job["properties"]) or {}, job["sourceName"] or "")
     props.setdefault("extras", {})
     model = body.get("model", job["model"]) or {}
-    bom_rows = body.get("bomRows", job["bomRows"]) or []
+    bom_rows = [] if job["sourceKind"] == "ipt" else (body.get("bomRows", job["bomRows"]) or [])
     timestamp = now()
     with connect() as conn:
         conn.execute(
@@ -571,6 +571,7 @@ def _render(job_id: str):
         "bom_rows": job["bomRows"],
         "selected_views": job["selectedViews"],
         "sample_note": job["sampleNote"] if job["sample"] else "",
+        "source_kind": job["sourceKind"],
     })
     width = float(template["sheetWidthIn"])
     height = float(template["sheetHeightIn"])

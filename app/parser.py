@@ -116,6 +116,8 @@ def from_inventor(filename: str, data: bytes, kind: str) -> dict:
         warnings.append("This file has no saved overall size. A sheet is not generated.")
     else:
         warnings.append("Overall size, part number, and material were read from the file. Views show that envelope.")
+    if kind == "ipt":
+        bom_rows = []
     model_kind = "part" if kind == "ipt" else "assembly"
     return {
         "fileName": filename,

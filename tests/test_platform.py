@@ -89,6 +89,64 @@ def test_part_sheet_uses_standard_template_and_bend_table(client):
     assert "ENTITIES" in dxf
 
 
+def test_ipt_sheet_has_no_parts_list_and_description_can_grow(client):
+    description = (
+        "Solid Square Cover Plate - End cover on the outrigger - 3.75 x 3.75 x 1/4. Corner 0.5rad"
+    )
+    created = client.post("/api/jobs", json={
+        "fileName": "T12454.ipt",
+        "fileKind": "ipt",
+        "properties": {
+            "partNumber": "T12454",
+            "description": description,
+            "material": "Steel, Mild",
+            "thickness": "0.25",
+        },
+        "model": {
+            "kind": "part",
+            "overall": {"length": 3.75, "width": 3.75, "height": 0.25},
+            "bends": [],
+            "views": {},
+        },
+        "bomRows": [{"item": "1", "partNumber": "SHOULD-NOT-SHOW", "description": "Hidden row", "qty": "4"}],
+    })
+    assert created.status_code == 200, created.text
+    job = created.json()
+    assert job["bomReady"] is False
+    generated = client.post(f"/api/jobs/{job['id']}/generate")
+    assert generated.status_code == 200, generated.text
+    svg = client.get(f"/api/jobs/{job['id']}/sheet.svg").text
+    assert "T12454" in svg
+    assert "Solid Square Cover Plate" in svg
+    assert "Steel, Mild" in svg
+    assert "THIRD ANGLE" in svg
+    assert "BEND ID" not in svg
+    assert "Parts List" not in svg
+    assert "ITEM QTY" not in svg
+    assert "SHOULD-NOT-SHOW" not in svg
+    from app.drawing.frame import BLOCK_W, description_lines, title_block_height
+
+    short = title_block_height({"description": "Center plate"}, BLOCK_W)
+    long_text = " ".join(["Cover plate note"] * 12)
+    assert len(long_text) <= 240
+    assert len(description_lines(description, BLOCK_W)) == 2
+    assert len(description_lines(long_text, BLOCK_W)) > 2
+    assert title_block_height({"description": long_text}, BLOCK_W) > short
+    tall = client.post("/api/jobs", json={
+        "fileName": "Long.ipt",
+        "fileKind": "ipt",
+        "properties": {"partNumber": "LONG-1", "description": long_text, "material": "Steel"},
+        "model": {"kind": "part", "overall": {"length": 10, "width": 4, "height": 0.25}, "bends": [], "views": {}},
+    })
+    assert tall.status_code == 200, tall.text
+    tall_id = tall.json()["id"]
+    assert client.post(f"/api/jobs/{tall_id}/generate").status_code == 200
+    tall_svg = client.get(f"/api/jobs/{tall_id}/sheet.svg").text
+    for line in description_lines(long_text, BLOCK_W):
+        assert line in tall_svg
+    assert "BEND ID" not in tall_svg
+
+
 def test_assembly_bom_uses_saved_format(client):
     created = client.post("/api/jobs", json={
         "fileName": "Head.iam",

@@ -40,11 +40,44 @@ def border(width: float, height: float) -> list[Prim]:
     ]
 
 
-def _cell_label(prims: list[Prim], x, y, w, h, label, value, value_size=0.11, bold=False):
-    prims.append(text(x + 0.06, y + h - 0.12, label, size=0.055))
-    lines = wrap(value or "—", w - 0.12, value_size)[:3]
+# standard-desc2: the Standard.idw / Standard.dwg title block.
+# The description is two lines. Each line past two grows the block.
+BLOCK_W = 8.20
+DESC_SIZE = 0.15
+DESC_PITCH = 0.22
+DESC_LINES = 2
+_PART_W = 1.72
+_THICK_W = 1.55
+_IDENT_H = 0.50
+_BODY_H = 1.70
+
+
+def _desc_width(block_w: float) -> float:
+    return max(3.2, block_w - _PART_W - 0.16)
+
+
+def description_lines(value: str, block_w: float) -> list[str]:
+    lines = wrap(value or "—", _desc_width(block_w), DESC_SIZE)
+    return lines or ["—"]
+
+
+def _desc_band(line_count: int) -> float:
+    """Label plus two description lines. Extra lines add one pitch each."""
+    count = max(DESC_LINES, line_count)
+    return 0.30 + count * DESC_PITCH
+
+
+def title_block_height(props: dict | None, block_w: float) -> float:
+    """Description is two lines. The block grows by one line for each line past two."""
+    count = len(description_lines((props or {}).get("description") or "", block_w))
+    return _desc_band(count) + _IDENT_H + _BODY_H
+
+
+def _cell_label(prims: list[Prim], x, y, w, h, label, value, value_size=0.11, bold=False, limit=2):
+    prims.append(text(x + 0.06, y + h - 0.13, label, size=0.05))
+    lines = wrap(value or "—", w - 0.12, value_size)[:limit]
     for i, line_text in enumerate(lines):
-        prims.append(text(x + 0.06, y + h * 0.42 - i * value_size * 1.15, line_text, size=value_size, bold=bold))
+        prims.append(text(x + 0.06, y + h - 0.30 - i * value_size * 1.2, line_text, size=value_size, bold=bold))
 
 
 def star(cx, cy, r_out=0.16, r_in=0.07) -> list[Prim]:
@@ -78,86 +111,89 @@ def projection_symbol(x, y) -> list[Prim]:
 
 
 def title_block(x, y, w, h, company: dict, props: dict) -> list[Prim]:
-    prims: list[Prim] = [rect(x, y, w, h, layer="TABLE")]
-    x1 = x + w * 0.23
-    x2 = x + w * 0.40
-    x3 = x + w * 0.68
-    y_mat = y + h * 0.38
-    y_bot = y + h * 0.18
-    prims.append(line(x, y_mat, x + w, y_mat, layer="TABLE"))
-    prims.append(line(x, y_bot, x + w, y_bot, layer="TABLE"))
-    prims.append(line(x1, y, x1, y + h, layer="TABLE"))
-    prims.append(line(x2, y_mat, x2, y + h, layer="TABLE"))
-    prims.append(line(x3, y_bot, x3, y + h, layer="TABLE"))
+    """ANSI-style standard-desc2 block. Description stays two lines and grows past that."""
+    lines = description_lines(props.get("description") or "", w)
+    band = _desc_band(len(lines))
+    y_body = y + _BODY_H
+    y_ident = y_body + _IDENT_H
+    y_top = y_ident + band
+    x_part = x + w - _PART_W
+    x_thick = x_part - _THICK_W
+    prims: list[Prim] = [rect(x, y, w, y_top - y, layer="TABLE")]
+    prims.append(line(x, y_body, x + w, y_body, layer="TABLE"))
+    prims.append(line(x, y_ident, x + w, y_ident, layer="TABLE"))
+    prims.append(line(x_part, y_body, x_part, y_top, layer="TABLE"))
+    prims.append(line(x_thick, y_body, x_thick, y_ident, layer="TABLE"))
 
-    # Tolerance column.
-    tol = company.get("tolerances") or []
-    prims.append(text(x + 0.06, y + h - 0.16, "UNLESS OTHERWISE SPECIFIED", size=0.052, bold=True))
-    prims.append(text(x + 0.06, y + h - 0.30, "TOLERANCE:", size=0.052))
-    for i, row in enumerate(tol[:6]):
-        prims.append(text(x + 0.06, y + h - 0.44 - i * 0.11, row, size=0.06))
-    prims.append(text(x + 0.06, y_mat + 0.08, "DO NOT SCALE PRINT", size=0.055, bold=True))
+    prims.append(text(x + 0.08, y_top - 0.12, "DESCRIPTION", size=0.045))
+    for i, line_text in enumerate(lines):
+        prims.append(text(x + 0.08, y_top - 0.34 - i * DESC_PITCH, line_text, size=DESC_SIZE, bold=True))
+    prims.append(text(x_part + 0.08, y_top - 0.12, "PART NO.", size=0.045))
+    pn_lines = wrap(props.get("partNumber") or "—", _PART_W - 0.16, 0.13)[:2] or ["—"]
+    pn_base = y_ident + max(0.12, (band - 0.18 - len(pn_lines) * 0.16) / 2)
+    for i, line_text in enumerate(pn_lines):
+        prims.append(text(x_part + 0.08, pn_base - i * 0.16, line_text, size=0.13, bold=True))
 
-    # Projection.
-    prims.append(text(x1 + 0.08, y + h - 0.18, "THIRD ANGLE", size=0.06, bold=True))
-    prims.append(text(x1 + 0.08, y + h - 0.32, "PROJECTION", size=0.06, bold=True))
-    prims.extend(projection_symbol(x1 + 0.12, y_mat + 0.28))
-    standard = company.get("standard") or "THIS DRAWING CONFORMS TO ASME Y14.5M-1994"
-    for i, row in enumerate(wrap(standard, (x2 - x1) - 0.12, 0.05)[:4]):
-        prims.append(text(x1 + 0.06, y_mat + 0.16 - i * 0.08, row, size=0.048))
+    prims.append(text(x + 0.08, y_ident - 0.13, "MATERIAL", size=0.045))
+    prims.append(text(x + 0.08, y_body + 0.12, props.get("material") or "—", size=0.11, bold=True))
+    prims.append(text(x_thick + 0.08, y_ident - 0.13, "THICKNESS", size=0.045))
+    prims.append(text(x_thick + 0.08, y_body + 0.12, props.get("thickness") or "—", size=0.11, bold=True))
+    prims.append(text(x_part + 0.08, y_ident - 0.13, "REV", size=0.045))
+    prims.append(text(x_part + 0.08, y_body + 0.12, props.get("rev") or "—", size=0.11, bold=True))
 
-    # Identity.
-    mark = company.get("mark")
-    name_x = x2 + 0.1
-    if mark == "star":
-        prims.extend(star(x2 + 0.22, y + h - 0.28, 0.14, 0.06))
-        name_x = x2 + 0.42
-    elif mark == "diamond":
-        prims.extend(diamond(x2 + 0.2, y + h - 0.28, 0.1))
-        name_x = x2 + 0.38
-    prims.append(text(name_x, y + h - 0.24, company.get("name", ""), size=0.15, bold=True))
-    prims.append(text(name_x, y + h - 0.40, company.get("sub", ""), size=0.07))
-    notice = company.get("proprietary") or ""
-    for i, row in enumerate(wrap(notice, (x3 - x2) - 0.16, 0.045)[:5]):
-        prims.append(text(x2 + 0.08, y + h - 0.58 - i * 0.075, row, size=0.045))
+    x_proj = x + 3.05
+    x_sign = x + 4.75
+    x_meta = x + w - 1.42
+    prims.append(line(x_proj, y, x_proj, y_body, layer="TABLE"))
+    prims.append(line(x_sign, y, x_sign, y_body, layer="TABLE"))
+    prims.append(line(x_meta, y, x_meta, y_body, layer="TABLE"))
 
-    # Right-hand name stack.
-    stack_h = (y + h - y_mat) / 4
-    rows = [
-        ("PRODUCT SERIES", props.get("productSeries") or company.get("productSeries") or ""),
-        ("DRAWN BY", _person(props.get("drawnBy"), props.get("drawnDate"))),
-        ("DESIGNER", _person(props.get("designer"), props.get("designerDate"))),
-        ("CHECKER", props.get("checker") or ""),
+    tol = company.get("tolerances") or [
+        "DIMENSIONS ARE IN INCHES",
+        ".X ± .1",
+        ".XX ± .01",
+        ".XXX ± .005",
+        "ANGLES ± 1°",
     ]
-    for i, (label, value) in enumerate(rows):
-        top = y + h - i * stack_h
+    prims.append(text(x + 0.08, y_body - 0.14, "UNLESS OTHERWISE SPECIFIED", size=0.042, bold=True))
+    for i, row in enumerate(tol[:5]):
+        prims.append(text(x + 0.08, y_body - 0.32 - i * 0.18, row, size=0.05))
+    prims.append(text(x + 0.08, y + 0.08, "DO NOT SCALE DRAWING", size=0.042, bold=True))
+
+    prims.append(text(x_proj + 0.08, y_body - 0.16, "THIRD ANGLE", size=0.05, bold=True))
+    prims.append(text(x_proj + 0.08, y_body - 0.32, "PROJECTION", size=0.045, bold=True))
+    prims.extend(projection_symbol(x_proj + 0.16, y + 0.36))
+
+    signatures = [
+        ("DRAWN", _person(props.get("drawnBy"), props.get("drawnDate")) or "—"),
+        ("CHECKED", (props.get("checker") or "").strip() or "—"),
+        ("ENG APPR", "—"),
+    ]
+    sign_h = _BODY_H / len(signatures)
+    for i, (label, value) in enumerate(signatures):
+        top = y_body - i * sign_h
         if i:
-            prims.append(line(x3, top, x + w, top, layer="TABLE"))
-        prims.append(text(x3 + 0.06, top - 0.11, label, size=0.05))
-        prims.append(text(x3 + 0.06, top - stack_h + 0.08, value or "—", size=0.075, bold=i == 0))
+            prims.append(line(x_sign, top, x_meta, top, layer="TABLE"))
+        prims.append(text(x_sign + 0.08, top - 0.14, label, size=0.045))
+        prims.append(text(x_sign + 0.08, top - sign_h + 0.10, value, size=0.08, bold=True))
+    notice = (company.get("proprietary") or "").strip()
+    if notice:
+        for i, row in enumerate(wrap(notice, x_proj - x - 0.16, 0.042)[:2]):
+            prims.append(text(x + 0.08, y + 0.42 - i * 0.12, row, size=0.042))
 
-    # Material / description / part number / rev.
-    x_pn = x1 + (x3 - x1) * 0.58
-    prims.append(line(x_pn, y_bot, x_pn, y_mat, layer="TABLE"))
-    _cell_label(prims, x, y_bot, x1 - x, y_mat - y_bot, "MATERIAL", props.get("material") or "", 0.09, True)
-    _cell_label(prims, x1, y_bot, x_pn - x1, y_mat - y_bot, "DESCRIPTION", props.get("description") or "", 0.08, True)
-    _cell_label(prims, x_pn, y_bot, x3 - x_pn, y_mat - y_bot, "PART NO.", props.get("partNumber") or "", 0.12, True)
-    _cell_label(prims, x3, y_bot, x + w - x3, y_mat - y_bot, "REV", props.get("rev") or "", 0.1, True)
-
-    # Bottom strip.
-    bottom_cells = [
-        ("SHEET SIZE", props.get("sheetSize") or ""),
-        ("MASS", props.get("mass") or ""),
-        ("THICKNESS", props.get("thickness") or ""),
+    meta = [
         ("SCALE", props.get("scale") or "SEE ABOVE"),
-        ("SHEET NO.", f"{props.get('sheetNumber') or '1'} OF {props.get('sheetCount') or '1'}"),
+        ("SIZE", props.get("sheetSize") or "—"),
+        ("MASS", props.get("mass") or "—"),
+        ("SHEET", f"{props.get('sheetNumber') or '1'} OF {props.get('sheetCount') or '1'}"),
     ]
-    cell_w = w / 5
-    for i, (label, value) in enumerate(bottom_cells):
+    cell_h = _BODY_H / len(meta)
+    for i, (label, value) in enumerate(meta):
+        top = y_body - i * cell_h
         if i:
-            prims.append(line(x + i * cell_w, y, x + i * cell_w, y_bot, layer="TABLE"))
-        prims.append(text(x + i * cell_w + 0.05, y_bot - 0.11, label, size=0.048))
-        prims.append(text(x + i * cell_w + 0.05, y + 0.05, value or "—", size=0.07, bold=True))
+            prims.append(line(x_meta, top, x + w, top, layer="TABLE"))
+        prims.append(text(x_meta + 0.06, top - 0.13, label, size=0.042))
+        prims.append(text(x_meta + 0.06, top - cell_h + 0.08, value or "—", size=0.07, bold=True))
     return prims
 
 

@@ -344,7 +344,8 @@
       hasSheet: !!job.snapshot,
     };
     if (copy.sop == null && item) copy.sop = review(effective(item, copy), forRules(copy));
-    copy.bomReady = copy.sourceKind === "iam" || (item && item.table && item.table.kind === "parts");
+    copy.bomReady = copy.sourceKind === "iam";
+    if (copy.sourceKind === "ipt") copy.bomRows = [];
     return copy;
   }
 
@@ -397,7 +398,7 @@
       selectedViews: payload.views || payload.selectedViews,
       properties: props,
       model,
-      bomRows: rows,
+      bomRows: kind === "ipt" ? [] : rows,
       warnings: payload.warnings || [],
       sample: !!payload.sample,
       sampleNote: payload.sampleNote || "",
@@ -498,6 +499,7 @@
     if (!sized) overall = {};
     if (sized) warnings.push("Overall size, part number, and material were read from the file. Views show that envelope.");
     else warnings.push("This file has no saved overall size. A sheet is not generated.");
+    if (kind === "ipt") bomRows = [];
     const description = props.description || props.subject || props.title || "";
     return {
       fileName: filename,
@@ -773,55 +775,94 @@
     return [rect(0.38, 0.38, width - 0.76, height - 0.76, "BORDER"), rect(0.5, 0.5, width - 1, height - 1, "THIN")];
   }
 
-  function cellLabel(prims, x, y, w, h, label, value, valueSize, bold) {
-    prims.push(text(x + 0.06, y + h - 0.12, label, 0.055));
-    wrap(value || "—", w - 0.12, valueSize).slice(0, 3).forEach((lineText, i) => {
-      prims.push(text(x + 0.06, y + h * 0.42 - i * valueSize * 1.15, lineText, valueSize, "start", bold));
+  const BLOCK_W = 8.20;
+  const DESC_SIZE = 0.15;
+  const DESC_PITCH = 0.22;
+  const DESC_LINES = 2;
+  const PART_W = 1.72;
+  const THICK_W = 1.55;
+  const IDENT_H = 0.50;
+  const BODY_H = 1.70;
+
+  function descWidth(blockW) {
+    return Math.max(3.2, blockW - PART_W - 0.16);
+  }
+
+  function descriptionLines(value, blockW) {
+    const lines = wrap(value || "—", descWidth(blockW), DESC_SIZE);
+    return lines.length ? lines : ["—"];
+  }
+
+  function descBand(lineCount) {
+    return 0.30 + Math.max(DESC_LINES, lineCount) * DESC_PITCH;
+  }
+
+  function titleBlockHeight(props, blockW) {
+    const count = descriptionLines((props && props.description) || "", blockW).length;
+    return descBand(count) + IDENT_H + BODY_H;
+  }
+
+  function cellLabel(prims, x, y, w, h, label, value, valueSize, bold, limit = 2) {
+    prims.push(text(x + 0.06, y + h - 0.13, label, 0.05));
+    wrap(value || "—", w - 0.12, valueSize).slice(0, limit).forEach((lineText, i) => {
+      prims.push(text(x + 0.06, y + h - 0.30 - i * valueSize * 1.2, lineText, valueSize, "start", bold));
     });
   }
 
   function titleBlock(x, y, w, h, company, props) {
-    const prims = [rect(x, y, w, h)];
-    const x1 = x + w * 0.23;
-    const x2 = x + w * 0.40;
-    const x3 = x + w * 0.68;
-    const yMat = y + h * 0.38;
-    const yBot = y + h * 0.18;
-    prims.push(line(x, yMat, x + w, yMat, "TABLE"), line(x, yBot, x + w, yBot, "TABLE"), line(x1, y, x1, y + h, "TABLE"), line(x2, yMat, x2, y + h, "TABLE"), line(x3, yBot, x3, y + h, "TABLE"));
-    prims.push(text(x + 0.06, y + h - 0.16, "UNLESS OTHERWISE SPECIFIED", 0.052, "start", true));
-    prims.push(text(x + 0.06, y + h - 0.30, "TOLERANCE:", 0.052));
-    (company.tolerances || []).slice(0, 6).forEach((row, i) => prims.push(text(x + 0.06, y + h - 0.44 - i * 0.11, row, 0.06)));
-    prims.push(text(x + 0.06, yMat + 0.08, "DO NOT SCALE PRINT", 0.055, "start", true));
-    prims.push(text(x1 + 0.08, y + h - 0.18, "THIRD ANGLE", 0.06, "start", true));
-    prims.push(text(x1 + 0.08, y + h - 0.32, "PROJECTION", 0.06, "start", true));
-    prims.push(line(x1 + 0.12, yMat + 0.44, x1 + 0.46, yMat + 0.56, "THIN"), line(x1 + 0.12, yMat + 0.44, x1 + 0.46, yMat + 0.32, "THIN"), line(x1 + 0.46, yMat + 0.56, x1 + 0.46, yMat + 0.32, "THIN"), line(x1 + 0.12, yMat + 0.32, x1 + 0.12, yMat + 0.56, "THIN"), circle(x1 + 0.64, yMat + 0.44, 0.09, "THIN"));
-    wrap(company.standard || "THIS DRAWING CONFORMS TO ASME Y14.5M-1994", (x2 - x1) - 0.12, 0.05).slice(0, 4).forEach((row, i) => {
-      prims.push(text(x1 + 0.06, yMat + 0.16 - i * 0.08, row, 0.048));
+    const lines = descriptionLines((props && props.description) || "", w);
+    const band = descBand(lines.length);
+    const yBody = y + BODY_H;
+    const yIdent = yBody + IDENT_H;
+    const yTop = yIdent + band;
+    const xPart = x + w - PART_W;
+    const xThick = xPart - THICK_W;
+    const prims = [rect(x, y, w, yTop - y)];
+    prims.push(line(x, yBody, x + w, yBody, "TABLE"), line(x, yIdent, x + w, yIdent, "TABLE"), line(xPart, yBody, xPart, yTop, "TABLE"), line(xThick, yBody, xThick, yIdent, "TABLE"));
+    prims.push(text(x + 0.08, yTop - 0.12, "DESCRIPTION", 0.045));
+    lines.forEach((lineText, i) => prims.push(text(x + 0.08, yTop - 0.34 - i * DESC_PITCH, lineText, DESC_SIZE, "start", true)));
+    prims.push(text(xPart + 0.08, yTop - 0.12, "PART NO.", 0.045));
+    const pnLines = wrap((props && props.partNumber) || "—", PART_W - 0.16, 0.13).slice(0, 2);
+    const shownPn = pnLines.length ? pnLines : ["—"];
+    const pnBase = yIdent + Math.max(0.12, (band - 0.18 - shownPn.length * 0.16) / 2);
+    shownPn.forEach((lineText, i) => prims.push(text(xPart + 0.08, pnBase - i * 0.16, lineText, 0.13, "start", true)));
+    prims.push(text(x + 0.08, yIdent - 0.13, "MATERIAL", 0.045));
+    prims.push(text(x + 0.08, yBody + 0.12, (props && props.material) || "—", 0.11, "start", true));
+    prims.push(text(xThick + 0.08, yIdent - 0.13, "THICKNESS", 0.045));
+    prims.push(text(xThick + 0.08, yBody + 0.12, (props && props.thickness) || "—", 0.11, "start", true));
+    prims.push(text(xPart + 0.08, yIdent - 0.13, "REV", 0.045));
+    prims.push(text(xPart + 0.08, yBody + 0.12, (props && props.rev) || "—", 0.11, "start", true));
+    const xProj = x + 3.05;
+    const xSign = x + 4.75;
+    const xMeta = x + w - 1.42;
+    prims.push(line(xProj, y, xProj, yBody, "TABLE"), line(xSign, y, xSign, yBody, "TABLE"), line(xMeta, y, xMeta, yBody, "TABLE"));
+    const tolerances = (company && company.tolerances && company.tolerances.length) ? company.tolerances : ["DIMENSIONS ARE IN INCHES", ".X ± .1", ".XX ± .01", ".XXX ± .005", "ANGLES ± 1°"];
+    prims.push(text(x + 0.08, yBody - 0.14, "UNLESS OTHERWISE SPECIFIED", 0.042, "start", true));
+    tolerances.slice(0, 5).forEach((row, i) => prims.push(text(x + 0.08, yBody - 0.32 - i * 0.18, row, 0.05)));
+    prims.push(text(x + 0.08, y + 0.08, "DO NOT SCALE DRAWING", 0.042, "start", true));
+    prims.push(text(xProj + 0.08, yBody - 0.16, "THIRD ANGLE", 0.05, "start", true));
+    prims.push(text(xProj + 0.08, yBody - 0.32, "PROJECTION", 0.045, "start", true));
+    const sx = xProj + 0.16;
+    const sy = y + 0.36;
+    prims.push(line(sx, sy + 0.16, sx + 0.34, sy + 0.28, "THIN"), line(sx, sy + 0.16, sx + 0.34, sy + 0.04, "THIN"), line(sx + 0.34, sy + 0.28, sx + 0.34, sy + 0.04, "THIN"), line(sx, sy + 0.04, sx, sy + 0.28, "THIN"), circle(sx + 0.52, sy + 0.16, 0.09, "THIN"));
+    const drawn = [props && props.drawnBy, props && props.drawnDate].filter(Boolean).join("   ");
+    const signatures = [["DRAWN", drawn || "—"], ["CHECKED", (props && props.checker) || "—"], ["ENG APPR", "—"]];
+    const signH = BODY_H / signatures.length;
+    signatures.forEach(([label, value], i) => {
+      const top = yBody - i * signH;
+      if (i) prims.push(line(xSign, top, xMeta, top, "TABLE"));
+      prims.push(text(xSign + 0.08, top - 0.14, label, 0.045));
+      prims.push(text(xSign + 0.08, top - signH + 0.10, value, 0.08, "start", true));
     });
-    let nameX = x2 + 0.1;
-    if (company.mark === "star" || company.mark === "diamond") nameX = x2 + 0.42;
-    if (company.name) prims.push(text(nameX, y + h - 0.24, company.name, 0.15, "start", true));
-    if (company.sub) prims.push(text(nameX, y + h - 0.40, company.sub, 0.07));
-    wrap(company.proprietary || "", (x3 - x2) - 0.16, 0.045).slice(0, 5).forEach((row, i) => prims.push(text(x2 + 0.08, y + h - 0.58 - i * 0.075, row, 0.045)));
-    const stackH = (y + h - yMat) / 4;
-    [["PRODUCT SERIES", props.productSeries || company.productSeries || ""], ["DRAWN BY", [props.drawnBy, props.drawnDate].filter(Boolean).join("   ")], ["DESIGNER", [props.designer, props.designerDate].filter(Boolean).join("   ")], ["CHECKER", props.checker || ""]].forEach(([label, value], i) => {
-      const top = y + h - i * stackH;
-      if (i) prims.push(line(x3, top, x + w, top, "TABLE"));
-      prims.push(text(x3 + 0.06, top - 0.11, label, 0.05));
-      prims.push(text(x3 + 0.06, top - stackH + 0.08, value || "—", 0.075, "start", i === 0));
-    });
-    const xPn = x1 + (x3 - x1) * 0.58;
-    prims.push(line(xPn, yBot, xPn, yMat, "TABLE"));
-    cellLabel(prims, x, yBot, x1 - x, yMat - yBot, "MATERIAL", props.material || "", 0.09, true);
-    cellLabel(prims, x1, yBot, xPn - x1, yMat - yBot, "DESCRIPTION", props.description || "", 0.08, true);
-    cellLabel(prims, xPn, yBot, x3 - xPn, yMat - yBot, "PART NO.", props.partNumber || "", 0.12, true);
-    cellLabel(prims, x3, yBot, x + w - x3, yMat - yBot, "REV", props.rev || "", 0.1, true);
-    const bottom = [["SHEET SIZE", props.sheetSize || ""], ["MASS", props.mass || ""], ["THICKNESS", props.thickness || ""], ["SCALE", props.scale || "SEE ABOVE"], ["SHEET NO.", `${props.sheetNumber || "1"} OF ${props.sheetCount || "1"}`]];
-    const cellW = w / 5;
-    bottom.forEach(([label, value], i) => {
-      if (i) prims.push(line(x + i * cellW, y, x + i * cellW, yBot, "TABLE"));
-      prims.push(text(x + i * cellW + 0.05, yBot - 0.11, label, 0.048));
-      prims.push(text(x + i * cellW + 0.05, y + 0.05, value || "—", 0.07, "start", true));
+    const notice = String((company && company.proprietary) || "").trim();
+    if (notice) wrap(notice, xProj - x - 0.16, 0.042).slice(0, 2).forEach((row, i) => prims.push(text(x + 0.08, y + 0.42 - i * 0.12, row, 0.042)));
+    const meta = [["SCALE", (props && props.scale) || "SEE ABOVE"], ["SIZE", (props && props.sheetSize) || "—"], ["MASS", (props && props.mass) || "—"], ["SHEET", `${(props && props.sheetNumber) || "1"} OF ${(props && props.sheetCount) || "1"}`]];
+    const cellH = BODY_H / meta.length;
+    meta.forEach(([label, value], i) => {
+      const top = yBody - i * cellH;
+      if (i) prims.push(line(xMeta, top, x + w, top, "TABLE"));
+      prims.push(text(xMeta + 0.06, top - 0.13, label, 0.042));
+      prims.push(text(xMeta + 0.06, top - cellH + 0.08, value || "—", 0.07, "start", true));
     });
     return prims;
   }
@@ -1044,14 +1085,17 @@
     const labels = {};
     (item.views || []).forEach((view) => { labels[view.role] = view.label || ROLE_LABELS[view.role] || view.role.toUpperCase(); });
     const outer = 0.5;
-    const tbH = height >= 16 ? 2.15 : height >= 10 ? 1.92 : 1.6;
-    const tbW = Math.min(10.8, width - 1.15);
+    const tbW = Math.min(BLOCK_W, width - 1.15);
+    const tbH = titleBlockHeight(props, tbW);
     const tb = [width - outer - tbW, outer, tbW, tbH];
     const kind = (item.table || {}).kind;
     let spec = null;
     let rows = [];
     if (kind === "bend") { spec = [item.table.title || "TABLE", item.table.columns || []]; rows = model.bends || []; }
     else if (kind === "parts" && fmt) { spec = [fmt.title || "Parts List", fmt.columns || []]; rows = job.bomRows || []; }
+    const partSheet = job.sourceKind === "ipt" || item.drawingType === "part";
+    if (partSheet && kind === "parts") spec = null;
+    if (partSheet && kind === "bend" && !rows.length) spec = null;
     let tableBox = null;
     if (spec && spec[1].length) {
       const tw = Math.min(7.6, width * 0.48);
@@ -1204,7 +1248,7 @@
       return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
     };
     const header = columns.map((col) => csv(col.heading || col.key || "")).join(",");
-    const rows = (job.bomRows || []).map((row) => columns.map((col) => csv(row[col.key])).join(","));
+    const rows = (job.sourceKind === "ipt" ? [] : (job.bomRows || [])).map((row) => columns.map((col) => csv(row[col.key])).join(","));
     return { body: `${[header, ...rows].join("\n")}\n`, type: "text/csv", download: `${title}-bom.csv` };
   }
 
@@ -1314,7 +1358,7 @@
       job.properties = sanitize(body.properties || job.properties, job.sourceName || "");
       job.properties.extras = job.properties.extras || {};
       job.model = body.model || job.model || {};
-      job.bomRows = body.bomRows || job.bomRows || [];
+      job.bomRows = job.sourceKind === "ipt" ? [] : (body.bomRows || job.bomRows || []);
       job.status = "draft";
       job.sop = null;
       job.updatedAt = stamp();

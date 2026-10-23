@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.drawing.frame import border, data_table, signoff_block, title_block
+from app.drawing.frame import BLOCK_W, border, data_table, signoff_block, title_block, title_block_height
 from app.drawing.prims import Prim, text
 from app.drawing.views import ROLE_LABELS, envelope_view, render_view, view_has_geometry
 
@@ -147,12 +147,20 @@ def compose(template: dict, bom_format: dict | None, job: dict) -> list[Prim]:
     label_for = {v["role"]: v.get("label") or ROLE_LABELS.get(v["role"], v["role"].upper()) for v in template.get("views") or []}
 
     outer = 0.50
-    tb_h = 2.15 if height >= 16 else 1.92 if height >= 10 else 1.6
-    tb_w = min(10.8, width - 1.15)
+    tb_w = min(BLOCK_W, width - 1.15)
+    tb_h = title_block_height(props, tb_w)
     tb = (width - outer - tb_w, outer, tb_w, tb_h)
 
     spec = table_spec(template, bom_format)
     rows = table_rows(template, model, job.get("bom_rows") or [])
+    kind = (template.get("table") or {}).get("kind")
+    source = job.get("source_kind") or ""
+    # A part has no parts list. An empty bend table is not drawn.
+    if source == "ipt" or template.get("drawing_type") == "part":
+        if kind == "parts":
+            spec = None
+        elif kind == "bend" and not rows:
+            spec = None
     table_box = None
     if spec and spec[1]:
         tw = min(7.6, width * 0.48)
