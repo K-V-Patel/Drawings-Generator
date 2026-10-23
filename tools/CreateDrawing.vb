@@ -3,7 +3,8 @@
 '
 ' Creates a drawing from TemplateName, so the border, title block, and
 ' dimension style are the Inventor template. Inventor places the front,
-' top, and right views, plus an isometric, and adds overall dimensions.
+' top, and right views, plus an isometric from the model Home view, and
+' adds overall dimensions.
 ' An assembly also gets a parts list. When it has more than one part,
 ' each part gets an item balloon.
 '
@@ -71,6 +72,7 @@ Sub Main()
         views("iso") = sheet.DrawingViews.AddBaseView( _
             model, tg.CreatePoint2d(sheet.Width * 0.75, sheet.Height * 0.68), _
             Math.Max(front.Scale * 0.75, 0.01), ViewOrientationTypeEnum.kIsoTopRightViewOrientation, style)
+        ApplyHomeCamera(views("iso"), model)
         drawDoc.Update()
         PositionViews(sheet, views, tg)
         drawDoc.Update()
@@ -213,6 +215,60 @@ Sub NameView(view As DrawingView, title As String)
     Try
         view.Name = title
         view.ShowLabel = True
+    Catch
+    End Try
+End Sub
+
+Sub ApplyHomeCamera(drawView As DrawingView, model As Document)
+    ' Iso Top Right stays in place when the model window has no Home camera.
+    Try
+    If drawView Is Nothing OrElse model Is Nothing Then Return
+    If model.Views.Count = 0 Then Return
+    Dim modelView As Inventor.View = model.Views.Item(1)
+    Dim live As Camera = modelView.Camera
+    Dim eyeX As Double = live.Eye.X
+    Dim eyeY As Double = live.Eye.Y
+    Dim eyeZ As Double = live.Eye.Z
+    Dim targetX As Double = live.Target.X
+    Dim targetY As Double = live.Target.Y
+    Dim targetZ As Double = live.Target.Z
+    Dim upX As Double = live.UpVector.X
+    Dim upY As Double = live.UpVector.Y
+    Dim upZ As Double = live.UpVector.Z
+    Dim wasPerspective As Boolean = live.Perspective
+    Try
+        modelView.GoHome()
+        Dim homeCam As Camera = modelView.Camera
+        Dim homeEyeX As Double = homeCam.Eye.X
+        Dim homeEyeY As Double = homeCam.Eye.Y
+        Dim homeEyeZ As Double = homeCam.Eye.Z
+        Dim homeTargetX As Double = homeCam.Target.X
+        Dim homeTargetY As Double = homeCam.Target.Y
+        Dim homeTargetZ As Double = homeCam.Target.Z
+        Dim homeUpX As Double = homeCam.UpVector.X
+        Dim homeUpY As Double = homeCam.UpVector.Y
+        Dim homeUpZ As Double = homeCam.UpVector.Z
+        Dim keepScale As Double = drawView.Scale
+        Dim tg As TransientGeometry = ThisApplication.TransientGeometry
+        Dim drawCam As Camera = drawView.Camera
+        drawCam.Eye = tg.CreatePoint(homeEyeX, homeEyeY, homeEyeZ)
+        drawCam.Target = tg.CreatePoint(homeTargetX, homeTargetY, homeTargetZ)
+        drawCam.UpVector = tg.CreateUnitVector(homeUpX, homeUpY, homeUpZ)
+        drawCam.Perspective = False
+        drawCam.Apply()
+        drawView.Scale = keepScale
+    Catch
+    End Try
+    Try
+        Dim restore As TransientGeometry = ThisApplication.TransientGeometry
+        live = modelView.Camera
+        live.Eye = restore.CreatePoint(eyeX, eyeY, eyeZ)
+        live.Target = restore.CreatePoint(targetX, targetY, targetZ)
+        live.UpVector = restore.CreateUnitVector(upX, upY, upZ)
+        live.Perspective = wasPerspective
+        live.ApplyWithoutTransition()
+    Catch
+    End Try
     Catch
     End Try
 End Sub
