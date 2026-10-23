@@ -1,7 +1,7 @@
 ' CreateDrawing.vb
 ' iLogic rule. Run it from an open part (.ipt) or assembly (.iam).
 '
-' Creates a drawing from Standard.idw, so the border, title block, and
+' Creates a drawing from TemplateName, so the border, title block, and
 ' dimension style are the Inventor template. Inventor places the front,
 ' top, and right views, plus an isometric, and adds overall dimensions.
 ' An assembly also gets a parts list. When it has more than one part,
@@ -21,6 +21,10 @@
 Imports System.Text
 Imports System.Collections.Generic
 
+' Drawing template. Use a file name from the Inventor template folder,
+' or a full path. Standard.idw is the usual shop template.
+Dim TemplateName As String = "Standard.idw"
+
 Sub Main()
     Dim model As Document = ThisDoc.Document
     If model.DocumentType <> DocumentTypeEnum.kPartDocumentObject AndAlso model.DocumentType <> DocumentTypeEnum.kAssemblyDocumentObject Then
@@ -32,9 +36,9 @@ Sub Main()
         Return
     End If
 
-    Dim templatePath As String = FindTemplate()
+    Dim templatePath As String = FindTemplate(TemplateName)
     If templatePath = "" Then
-        MessageBox.Show("Standard.idw was not found in the Inventor template folder.", "Drawings Generator")
+        MessageBox.Show(TemplateName & " was not found in the Inventor template folder.", "Drawings Generator")
         Return
     End If
 
@@ -106,17 +110,22 @@ Sub Main()
     End Try
 End Sub
 
-Function FindTemplate() As String
+Function FindTemplate(templateFile As String) As String
+    If templateFile = "" Then Return ""
+    If templateFile.Contains("\") OrElse templateFile.Contains("/") Then
+        If System.IO.File.Exists(templateFile) Then Return templateFile
+        Return ""
+    End If
     Dim candidates As New List(Of String)
     Try
         Dim folder As String = ThisApplication.DesignProjectManager.ActiveDesignProject.TemplatesPath
-        candidates.Add(System.IO.Path.Combine(folder, "en-US", "Standard.idw"))
-        candidates.Add(System.IO.Path.Combine(folder, "Standard.idw"))
+        candidates.Add(System.IO.Path.Combine(folder, "en-US", templateFile))
+        candidates.Add(System.IO.Path.Combine(folder, templateFile))
     Catch
     End Try
-    candidates.Add("C:\Users\Public\Documents\Autodesk\Inventor 2025\Templates\en-US\Standard.idw")
-    candidates.Add("C:\Users\Public\Documents\Autodesk\Inventor 2026\Templates\en-US\Standard.idw")
-    candidates.Add("C:\Users\Public\Documents\Autodesk\Inventor 2024\Templates\en-US\Standard.idw")
+    candidates.Add(System.IO.Path.Combine("C:\Users\Public\Documents\Autodesk\Inventor 2025\Templates\en-US", templateFile))
+    candidates.Add(System.IO.Path.Combine("C:\Users\Public\Documents\Autodesk\Inventor 2026\Templates\en-US", templateFile))
+    candidates.Add(System.IO.Path.Combine("C:\Users\Public\Documents\Autodesk\Inventor 2024\Templates\en-US", templateFile))
     For Each candidate As String In candidates
         If candidate <> "" AndAlso System.IO.File.Exists(candidate) Then Return candidate
     Next
