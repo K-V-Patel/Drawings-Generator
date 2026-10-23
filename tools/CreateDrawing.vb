@@ -9,7 +9,8 @@
 ' added on the orthographic views.
 ' An assembly also gets a parts list. When it has more than one part,
 ' each part gets one balloon just outside that part on the isometric
-' view. Item numbers are not stacked in order.
+' view. Balloons that already fall in a row or a column share that line.
+' Item numbers are not stacked in order.
 '
 ' The drawing is saved as the part number .idw in the sibling Drawing
 ' folder when that folder exists, otherwise beside the model. An existing
@@ -487,7 +488,7 @@ Function PlaceNearBalloons(sheet As Sheet, host As DrawingView, targets As List(
             tipY.Add(spot.Y)
         End If
     Next
-    NudgeApart(host, tipX, tipY, 1.3)
+    AlignNearby(host, tipX, tipY)
     ClampTips(sheet, tipX, tipY)
     Dim index As Integer = 0
     Do While index < occs.Count
@@ -672,6 +673,290 @@ Function TipBeside(sheet As Sheet, host As DrawingView, edge As Point2d) As Poin
     If tipY > sheet.Height - margin Then tipY = sheet.Height - margin
     Return ThisApplication.TransientGeometry.CreatePoint2d(tipX, tipY)
 End Function
+
+Sub AlignNearby(host As DrawingView, xs As List(Of Double), ys As List(Of Double))
+    If host Is Nothing OrElse host.Position Is Nothing Then Return
+    If xs Is Nothing OrElse ys Is Nothing Then Return
+    Dim count As Integer = xs.Count
+    If ys.Count < count Then count = ys.Count
+    If count < 2 Then Return
+    Dim ox As New List(Of Double)
+    Dim oy As New List(Of Double)
+    Dim parent As New List(Of Integer)
+    Dim mode As New List(Of Integer)
+    Dim i As Integer = 0
+    Do While i < count
+        ox.Add(xs(i))
+        oy.Add(ys(i))
+        parent.Add(i)
+        mode.Add(0)
+        i = i + 1
+    Loop
+    Dim crossTol As Double = 2.6
+    Dim alongTol As Double = 8.0
+    Dim j As Integer = 0
+    Dim dx As Double = 0
+    Dim dy As Double = 0
+    Dim match As Boolean = False
+    i = 0
+    Do While i < count
+        Dim bestCol As Integer = -1
+        Dim bestColCross As Double = crossTol
+        Dim bestColAlong As Double = alongTol
+        Dim bestRow As Integer = -1
+        Dim bestRowCross As Double = crossTol
+        Dim bestRowAlong As Double = alongTol
+        j = 0
+        Do While j < count
+            If j <> i Then
+                dx = Math.Abs(ox(j) - ox(i))
+                dy = Math.Abs(oy(j) - oy(i))
+                If dx <= crossTol AndAlso dy <= alongTol AndAlso dy >= dx Then
+                    If dx < bestColCross - 0.001 OrElse (Math.Abs(dx - bestColCross) <= 0.001 AndAlso dy < bestColAlong) Then
+                        bestCol = j
+                        bestColCross = dx
+                        bestColAlong = dy
+                    End If
+                End If
+                If dy <= crossTol AndAlso dx <= alongTol AndAlso dx > dy Then
+                    If dy < bestRowCross - 0.001 OrElse (Math.Abs(dy - bestRowCross) <= 0.001 AndAlso dx < bestRowAlong) Then
+                        bestRow = j
+                        bestRowCross = dy
+                        bestRowAlong = dx
+                    End If
+                End If
+            End If
+            j = j + 1
+        Loop
+        If bestCol >= 0 AndAlso (bestRow < 0 OrElse bestColCross <= bestRowCross) Then
+            mode(i) = 1
+        ElseIf bestRow >= 0 Then
+            mode(i) = 2
+        End If
+        i = i + 1
+    Loop
+    i = 0
+    Do While i < count
+        j = i + 1
+        Do While j < count
+            If mode(i) <> 0 AndAlso mode(i) = mode(j) Then
+                dx = Math.Abs(ox(j) - ox(i))
+                dy = Math.Abs(oy(j) - oy(i))
+                match = False
+                If mode(i) = 1 AndAlso dx <= crossTol AndAlso dy <= alongTol Then match = True
+                If mode(i) = 2 AndAlso dy <= crossTol AndAlso dx <= alongTol Then match = True
+                If match Then JoinTip(parent, i, j)
+            End If
+            j = j + 1
+        Loop
+        i = i + 1
+    Loop
+    Dim seenRoot As New List(Of Integer)
+    i = 0
+    Do While i < count
+        Dim root As Integer = FindTip(parent, i)
+        If Not seenRoot.Contains(root) Then
+            seenRoot.Add(root)
+            Dim members As New List(Of Integer)
+            Dim k As Integer = 0
+            Do While k < count
+                If FindTip(parent, k) = root Then members.Add(k)
+                k = k + 1
+            Loop
+            If members.Count > 1 AndAlso mode(i) <> 0 Then
+                SnapLine(host, xs, ys, ox, oy, members, mode(i) = 1)
+            End If
+        End If
+        i = i + 1
+    Loop
+    SettleLines(xs, ys, 1.35)
+End Sub
+
+Sub JoinTip(parent As List(Of Integer), a As Integer, b As Integer)
+    Dim ra As Integer = FindTip(parent, a)
+    Dim rb As Integer = FindTip(parent, b)
+    If ra = rb Then Return
+    parent(rb) = ra
+End Sub
+
+Function FindTip(parent As List(Of Integer), index As Integer) As Integer
+    Dim guard As Integer = 0
+    Do While parent(index) <> index
+        parent(index) = parent(parent(index))
+        index = parent(index)
+        guard = guard + 1
+        If guard > parent.Count + 2 Then Exit Do
+    Loop
+    Return index
+End Function
+
+Sub SnapLine(host As DrawingView, xs As List(Of Double), ys As List(Of Double), ox As List(Of Double), oy As List(Of Double), members As List(Of Integer), asColumn As Boolean)
+    Dim center As Double = host.Position.X
+    If Not asColumn Then center = host.Position.Y
+    Dim cap As Double = 2.2
+    Dim lo As Double = -1.0E+30
+    Dim hi As Double = 1.0E+30
+    Dim n As Integer = 0
+    Dim origin As Double = 0
+    Do While n < members.Count
+        origin = oy(members(n))
+        If asColumn Then origin = ox(members(n))
+        If origin - cap > lo Then lo = origin - cap
+        If origin + cap < hi Then hi = origin + cap
+        n = n + 1
+    Loop
+    Dim share As Double = lo
+    If lo <= hi Then
+        If Math.Abs(lo - center) >= Math.Abs(hi - center) Then
+            share = lo
+        Else
+            share = hi
+        End If
+    Else
+        share = oy(members(0))
+        If asColumn Then share = ox(members(0))
+        n = 1
+        Do While n < members.Count
+            origin = oy(members(n))
+            If asColumn Then origin = ox(members(n))
+            If Math.Abs(origin - center) > Math.Abs(share - center) Then share = origin
+            n = n + 1
+        Loop
+    End If
+    n = 0
+    Do While n < members.Count
+        Dim id As Integer = members(n)
+        If asColumn Then
+            xs(id) = PullToward(ox(id), share, cap)
+        Else
+            ys(id) = PullToward(oy(id), share, cap)
+        End If
+        n = n + 1
+    Loop
+    SpaceMembers(xs, ys, ox, oy, members, asColumn, 1.35)
+End Sub
+
+Function PullToward(origin As Double, target As Double, cap As Double) As Double
+    Dim delta As Double = target - origin
+    If delta > cap Then Return origin + cap
+    If delta < -cap Then Return origin - cap
+    Return target
+End Function
+
+Sub SpaceMembers(xs As List(Of Double), ys As List(Of Double), ox As List(Of Double), oy As List(Of Double), members As List(Of Integer), asColumn As Boolean, gap As Double)
+    Dim order As New List(Of Integer)
+    Dim n As Integer = 0
+    Do While n < members.Count
+        order.Add(members(n))
+        n = n + 1
+    Loop
+    Dim a As Integer = 0
+    Do While a < order.Count
+        Dim b As Integer = a + 1
+        Do While b < order.Count
+            Dim aPos As Double = xs(order(a))
+            Dim bPos As Double = xs(order(b))
+            If asColumn Then
+                aPos = ys(order(a))
+                bPos = ys(order(b))
+            End If
+            If bPos < aPos Then
+                Dim swap As Integer = order(a)
+                order(a) = order(b)
+                order(b) = swap
+            End If
+            b = b + 1
+        Loop
+        a = a + 1
+    Loop
+    a = 1
+    Do While a < order.Count
+        Dim prev As Double = xs(order(a - 1))
+        Dim cur As Double = xs(order(a))
+        If asColumn Then
+            prev = ys(order(a - 1))
+            cur = ys(order(a))
+        End If
+        If cur < prev + gap Then cur = prev + gap
+        If asColumn Then
+            ys(order(a)) = cur
+        Else
+            xs(order(a)) = cur
+        End If
+        a = a + 1
+    Loop
+    Dim oldSum As Double = 0
+    Dim newSum As Double = 0
+    a = 0
+    Do While a < order.Count
+        If asColumn Then
+            oldSum = oldSum + oy(order(a))
+            newSum = newSum + ys(order(a))
+        Else
+            oldSum = oldSum + ox(order(a))
+            newSum = newSum + xs(order(a))
+        End If
+        a = a + 1
+    Loop
+    Dim slide As Double = (oldSum - newSum) / order.Count
+    a = 0
+    Do While a < order.Count
+        If asColumn Then
+            ys(order(a)) = ys(order(a)) + slide
+        Else
+            xs(order(a)) = xs(order(a)) + slide
+        End If
+        a = a + 1
+    Loop
+End Sub
+
+Sub SettleLines(xs As List(Of Double), ys As List(Of Double), gap As Double)
+    If xs Is Nothing OrElse ys Is Nothing Then Return
+    Dim guard As Integer = 0
+    Do While guard < 6
+        guard = guard + 1
+        Dim moved As Boolean = False
+        Dim i As Integer = 0
+        Do While i < xs.Count
+            Dim j As Integer = i + 1
+            Do While j < xs.Count AndAlso j < ys.Count
+                Dim dx As Double = xs(j) - xs(i)
+                Dim dy As Double = ys(j) - ys(i)
+                Dim ax As Double = Math.Abs(dx)
+                Dim ay As Double = Math.Abs(dy)
+                Dim push As Double = 0
+                If ax < gap AndAlso ay < gap Then
+                    If ax <= 0.2 Then
+                        push = (gap - ay) / 2 + 0.05
+                        If push < 0.12 Then push = 0.12
+                        If dy >= 0 Then
+                            ys(i) = ys(i) - push
+                            ys(j) = ys(j) + push
+                        Else
+                            ys(i) = ys(i) + push
+                            ys(j) = ys(j) - push
+                        End If
+                        moved = True
+                    ElseIf ay <= 0.2 Then
+                        push = (gap - ax) / 2 + 0.05
+                        If push < 0.12 Then push = 0.12
+                        If dx >= 0 Then
+                            xs(i) = xs(i) - push
+                            xs(j) = xs(j) + push
+                        Else
+                            xs(i) = xs(i) + push
+                            xs(j) = xs(j) - push
+                        End If
+                        moved = True
+                    End If
+                End If
+                j = j + 1
+            Loop
+            i = i + 1
+        Loop
+        If Not moved Then Exit Do
+    Loop
+End Sub
 
 Sub NudgeApart(host As DrawingView, xs As List(Of Double), ys As List(Of Double), gap As Double)
     If host Is Nothing OrElse host.Position Is Nothing Then Return
