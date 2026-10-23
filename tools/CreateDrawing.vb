@@ -87,6 +87,7 @@ Sub Main()
 
         Dim balloonNote As String = ""
         If model.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then
+            ShowAssemblyParts(sheet, views)
             TryAddPartsList(sheet, views("front"), tg)
             drawDoc.Update()
             balloonNote = AddItemBalloons(sheet, model, views, tg)
@@ -423,16 +424,22 @@ End Function
 
 Function CurvesForPart(view As DrawingView, occ As ComponentOccurrence) As List(Of DrawingCurve)
     Dim lines As New List(Of DrawingCurve)
+    Dim hiddenLines As New List(Of DrawingCurve)
     Dim others As New List(Of DrawingCurve)
-    CollectPartCurves(view, occ, lines, others, True)
-    If lines.Count = 0 AndAlso others.Count = 0 Then CollectPartCurves(view, occ, lines, others, False)
+    CollectPartCurves(view, occ, lines, hiddenLines, others, True)
+    If lines.Count = 0 AndAlso hiddenLines.Count = 0 AndAlso others.Count = 0 Then
+        CollectPartCurves(view, occ, lines, hiddenLines, others, False)
+    End If
+    For Each curve As DrawingCurve In hiddenLines
+        lines.Add(curve)
+    Next
     For Each curve As DrawingCurve In others
         lines.Add(curve)
     Next
     Return lines
 End Function
 
-Sub CollectPartCurves(view As DrawingView, occ As ComponentOccurrence, lines As List(Of DrawingCurve), others As List(Of DrawingCurve), directOnly As Boolean)
+Sub CollectPartCurves(view As DrawingView, occ As ComponentOccurrence, lines As List(Of DrawingCurve), hiddenLines As List(Of DrawingCurve), others As List(Of DrawingCurve), directOnly As Boolean)
     Try
         Dim curves As DrawingCurvesEnumerator = Nothing
         If directOnly Then
@@ -443,8 +450,10 @@ Sub CollectPartCurves(view As DrawingView, occ As ComponentOccurrence, lines As 
         If curves Is Nothing Then Return
         For Each curve As DrawingCurve In curves
             If Not directOnly AndAlso Not SameOccurrence(CurveOwner(curve), occ) Then Continue For
-            If IsLine(curve) Then
+            If IsLine(curve) AndAlso Not IsHidden(curve) Then
                 lines.Add(curve)
+            ElseIf IsLine(curve) Then
+                hiddenLines.Add(curve)
             Else
                 others.Add(curve)
             End If
@@ -452,6 +461,15 @@ Sub CollectPartCurves(view As DrawingView, occ As ComponentOccurrence, lines As 
     Catch
     End Try
 End Sub
+
+Function IsHidden(curve As DrawingCurve) As Boolean
+    Try
+        If curve.Segments Is Nothing OrElse curve.Segments.Count = 0 Then Return False
+        Return curve.Segments.Item(1).HiddenLine
+    Catch
+        Return False
+    End Try
+End Function
 
 Function IsLine(curve As DrawingCurve) As Boolean
     Try
@@ -513,26 +531,77 @@ End Function
 Function PlaceBalloon(sheet As Sheet, curve As DrawingCurve, tip As Point2d) As String
     Dim attach As Point2d = PointOnCurve(curve)
     If attach Is Nothing Then Return "The part curve has no attach point."
-    Dim intent As GeometryIntent = Nothing
-    Try
-        intent = sheet.CreateGeometryIntent(curve, attach)
-    Catch ex As Exception
-        Return ex.Message
-    End Try
-    If intent Is Nothing Then Return "The part curve has no attach point."
-    Dim plain As String = AddBalloon(sheet, tip, intent, False)
-    If plain = "" Then Return ""
-    Return AddBalloon(sheet, tip, intent, True)
+    Dim problem As String = "The part curve has no attach point."
+    Dim mode As Integer = 0
+    Do While mode <= 2
+        Dim attempt As String = AttachBalloon(sheet, curve, attach, tip, mode)
+        If attempt = "" Then Return ""
+        problem = attempt
+        mode = mode + 1
+    Loop
+    Return problem
 End Function
 
-Function AddBalloon(sheet As Sheet, tip As Point2d, intent As GeometryIntent, withLevel As Boolean) As String
-    ' Balloon position first. The part edge, with a point on that edge, is last.
+Function AttachBalloon(sheet As Sheet, curve As DrawingCurve, attach As Point2d, tip As Point2d, mode As Integer) As String
+    Dim intent As GeometryIntent = MakeIntent(sheet, curve, attach, mode)
+    If intent Is Nothing Then Return "The part curve has no attach point."
+    ' Inventor's balloon sample places the symbol, then a bend, then the edge.
+    Dim bent As String = CommitBalloon(sheet, BuildLeader(tip, attach, intent, True), False)
+    If bent = "" Then Return ""
+    Dim bentLevel As String = CommitBalloon(sheet, BuildLeader(tip, attach, intent, True), True)
+    If bentLevel = "" Then Return ""
+    Dim straight As String = CommitBalloon(sheet, BuildLeader(tip, attach, intent, False), False)
+    If straight = "" Then Return ""
+    Return bent
+End Function
+
+Function MakeIntent(sheet As Sheet, curve As DrawingCurve, attach As Point2d, mode As Integer) As GeometryIntent
+    Try
+        If mode = 1 Then
+            Dim param As Double = 0.5
+            Return sheet.CreateGeometryIntent(curve, param)
+        End If
+        If mode = 2 Then
+            Return sheet.CreateGeometryIntent(curve, PointIntentEnum.kMidPointIntent)
+        End If
+        Return sheet.CreateGeometryIntent(curve, attach)
+    Catch
+        Return Nothing
+    End Try
+End Function
+
+Function BuildLeader(tip As Point2d, attach As Point2d, intent As GeometryIntent, useElbow As Boolean) As ObjectCollection
     Dim points As ObjectCollection = ThisApplication.TransientObjects.CreateObjectCollection()
     points.Add(tip)
+    If useElbow Then
+        Dim elbow As Point2d = LeaderElbow(tip, attach)
+        If elbow IsNot Nothing Then points.Add(elbow)
+    End If
     points.Add(intent)
+    Return points
+End Function
+
+Function LeaderElbow(tip As Point2d, attach As Point2d) As Point2d
+    If tip Is Nothing OrElse attach Is Nothing Then Return Nothing
+    Dim dx As Double = attach.X - tip.X
+    Dim dy As Double = attach.Y - tip.Y
+    Dim elbowX As Double = tip.X
+    Dim elbowY As Double = tip.Y
+    If Math.Abs(dx) >= Math.Abs(dy) Then
+        elbowX = tip.X + dx * 0.65
+    Else
+        elbowY = tip.Y + dy * 0.65
+    End If
+    If Math.Abs(elbowX - tip.X) < 0.3 AndAlso Math.Abs(elbowY - tip.Y) < 0.3 Then Return Nothing
+    If Math.Abs(elbowX - attach.X) < 0.15 AndAlso Math.Abs(elbowY - attach.Y) < 0.15 Then Return Nothing
+    Return ThisApplication.TransientGeometry.CreatePoint2d(elbowX, elbowY)
+End Function
+
+Function CommitBalloon(sheet As Sheet, points As ObjectCollection, useLevel As Boolean) As String
     Try
-        If withLevel Then
-            sheet.Balloons.Add(points, Nothing, PartsListLevelEnum.kStructured)
+        If useLevel Then
+            ' Used only when this drawing has no parts list yet. A missing slot, not a null.
+            sheet.Balloons.Add(points, System.Type.Missing, PartsListLevelEnum.kStructured)
         Else
             sheet.Balloons.Add(points)
         End If
@@ -567,10 +636,18 @@ End Function
 Function WriteCurves(model As Document, views As Dictionary(Of String, DrawingView)) As String
     Dim path As String = OutputPath(model, ".drawgen.json")
     Dim culture = System.Globalization.CultureInfo.InvariantCulture
-    Dim box As Box = model.ComponentDefinition.RangeBox
-    Dim lengthIn As Double = Math.Abs(box.MaxPoint.X - box.MinPoint.X) / 2.54
-    Dim heightIn As Double = Math.Abs(box.MaxPoint.Y - box.MinPoint.Y) / 2.54
-    Dim widthIn As Double = Math.Abs(box.MaxPoint.Z - box.MinPoint.Z) / 2.54
+    Dim lengthIn As Double = 0
+    Dim heightIn As Double = 0
+    Dim widthIn As Double = 0
+    Try
+        Dim box As Box = model.ComponentDefinition.RangeBox
+        If box IsNot Nothing AndAlso box.MaxPoint IsNot Nothing AndAlso box.MinPoint IsNot Nothing Then
+            lengthIn = Math.Abs(box.MaxPoint.X - box.MinPoint.X) / 2.54
+            heightIn = Math.Abs(box.MaxPoint.Y - box.MinPoint.Y) / 2.54
+            widthIn = Math.Abs(box.MaxPoint.Z - box.MinPoint.Z) / 2.54
+        End If
+    Catch
+    End Try
     Dim fileKind As String = "ipt"
     Dim modelKind As String = "part"
     If model.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then
