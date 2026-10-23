@@ -64,9 +64,9 @@ Sub Main()
             model, tg.CreatePoint2d(sheet.Width * 0.38, sheet.Height * 0.42), _
             0.1, ViewOrientationTypeEnum.kFrontViewOrientation, style)
         ApplyFacing(front, model, "AppFrontViewCmd")
-        drawDoc.Update()
+        QuietUpdate(drawDoc)
         front.Scale = FitScale(sheet, model, front)
-        drawDoc.Update()
+        QuietUpdate(drawDoc)
 
         Dim views As New Dictionary(Of String, DrawingView)
         views("front") = front
@@ -76,9 +76,9 @@ Sub Main()
             model, tg.CreatePoint2d(sheet.Width * 0.75, sheet.Height * 0.68), _
             Math.Max(front.Scale * 0.75, 0.01), ViewOrientationTypeEnum.kIsoTopRightViewOrientation, style)
         ApplyHomeCamera(views("iso"), model)
-        drawDoc.Update()
+        QuietUpdate(drawDoc)
         PositionViews(sheet, views, tg)
-        drawDoc.Update()
+        QuietUpdate(drawDoc)
         ShrinkToSheet(drawDoc, sheet, views, tg)
         NameView(views("front"), "FRONT")
         NameView(views("top"), "TOP")
@@ -94,12 +94,18 @@ Sub Main()
         If model.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then
             ShowAssemblyParts(sheet, views)
             TryAddPartsList(sheet, views("front"), tg)
-            drawDoc.Update()
+            QuietUpdate(drawDoc)
             balloonNote = AddItemBalloons(sheet, model, views, tg)
         End If
-        drawDoc.Update()
+        QuietUpdate(drawDoc)
 
-        Dim idwPath As String = SaveDrawing(drawDoc, model)
+        Dim idwPath As String = ""
+        Try
+            idwPath = SaveDrawing(drawDoc, model)
+        Catch ex As Exception
+            MessageBox.Show("Could not save the drawing: " & ex.Message, "Drawings Generator")
+            Return
+        End Try
         Dim jsonNote As String = ""
         Try
             jsonNote = WriteCurves(model, views)
@@ -340,9 +346,35 @@ Sub TryAddOverall(sheet As Sheet, view As DrawingView, horizontal As Boolean, tg
     End Try
 End Sub
 
+Sub QuietUpdate(drawDoc As DrawingDocument)
+    Try
+        drawDoc.Update()
+    Catch
+    End Try
+End Sub
+
 Sub TryAddPartsList(sheet As Sheet, front As DrawingView, tg As TransientGeometry)
     Try
-        sheet.PartsLists.Add(front, tg.CreatePoint2d(2.2, sheet.Height - 1.8))
+        Dim table As PartsList = sheet.PartsLists.Add(front, tg.CreatePoint2d(4.0, sheet.Height - 2.0))
+        KeepPartsListOnSheet(sheet, table, tg)
+    Catch
+    End Try
+End Sub
+
+Sub KeepPartsListOnSheet(sheet As Sheet, table As PartsList, tg As TransientGeometry)
+    Try
+        Dim box As Box2d = table.RangeBox
+        If box Is Nothing OrElse box.MinPoint Is Nothing OrElse box.MaxPoint Is Nothing Then Return
+        Dim shiftX As Double = 0
+        Dim shiftY As Double = 0
+        If box.MinPoint.X < 1.4 Then shiftX = 1.4 - box.MinPoint.X
+        If box.MaxPoint.X + shiftX > sheet.Width - 1.4 Then shiftX = sheet.Width - 1.4 - box.MaxPoint.X
+        If box.MaxPoint.Y > sheet.Height - 1.2 Then shiftY = sheet.Height - 1.2 - box.MaxPoint.Y
+        If box.MinPoint.Y + shiftY < 1.2 Then shiftY = 1.2 - box.MinPoint.Y
+        If shiftX = 0 AndAlso shiftY = 0 Then Return
+        Dim origin As Point2d = table.Position
+        If origin Is Nothing Then Return
+        table.Position = tg.CreatePoint2d(origin.X + shiftX, origin.Y + shiftY)
     Catch
     End Try
 End Sub
@@ -955,12 +987,17 @@ End Function
 
 Function LeaderElbow(tip As Point2d, attach As Point2d) As Point2d
     If tip Is Nothing OrElse attach Is Nothing Then Return Nothing
-    ' Short horizontal shoulder so the balloon column stays in one line.
-    Dim shoulder As Double = 0.45
-    Dim elbowX As Double = tip.X + shoulder
-    If attach.X < tip.X Then elbowX = tip.X - shoulder
-    If Math.Abs(elbowX - attach.X) < 0.3 Then Return Nothing
-    Return ThisApplication.TransientGeometry.CreatePoint2d(elbowX, tip.Y)
+    Dim dx As Double = attach.X - tip.X
+    Dim dy As Double = attach.Y - tip.Y
+    Dim ax As Double = Math.Abs(dx)
+    Dim ay As Double = Math.Abs(dy)
+    Dim span As Double = ax
+    If ay > span Then span = ay
+    ' A bend only when the balloon is far enough from the edge to leave a real gap.
+    If span < 0.9 Then Return Nothing
+    Dim pull As Double = 0.45 / span
+    If pull > 0.4 Then pull = 0.4
+    Return ThisApplication.TransientGeometry.CreatePoint2d(tip.X + dx * pull, tip.Y + dy * pull)
 End Function
 
 Function CommitBalloon(sheet As Sheet, points As ObjectCollection, useLevel As Boolean) As String
