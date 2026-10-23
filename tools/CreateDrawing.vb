@@ -2,9 +2,10 @@
 ' iLogic rule. Run it from an open part (.ipt) or assembly (.iam).
 '
 ' Creates a drawing from TemplateName, so the border, title block, and
-' dimension style are the Inventor template. Inventor places the front,
-' top, and right views from the model ViewCube, plus an isometric from
-' the model Home view, and adds overall dimensions.
+' dimension style are the Inventor template. The front view follows the
+' model ViewCube. Top and side are projected from that front view so they
+' stay aligned. The isometric view uses the model Home view. Overall
+' dimensions are added on the orthographic views.
 ' An assembly also gets a parts list. When it has more than one part,
 ' each part gets an item balloon.
 '
@@ -68,14 +69,8 @@ Sub Main()
 
         Dim views As New Dictionary(Of String, DrawingView)
         views("front") = front
-        views("top") = sheet.DrawingViews.AddBaseView( _
-            model, tg.CreatePoint2d(front.Position.X, front.Position.Y + front.Height), _
-            front.Scale, ViewOrientationTypeEnum.kTopViewOrientation, style)
-        ApplyFacing(views("top"), model, "AppTopViewCmd")
-        views("side") = sheet.DrawingViews.AddBaseView( _
-            model, tg.CreatePoint2d(front.Position.X + front.Width, front.Position.Y), _
-            front.Scale, ViewOrientationTypeEnum.kRightViewOrientation, style)
-        ApplyFacing(views("side"), model, "AppRightViewCmd")
+        views("top") = sheet.DrawingViews.AddProjectedView(front, tg.CreatePoint2d(front.Position.X, front.Position.Y + front.Height), style)
+        views("side") = sheet.DrawingViews.AddProjectedView(front, tg.CreatePoint2d(front.Position.X + front.Width, front.Position.Y), style)
         views("iso") = sheet.DrawingViews.AddBaseView( _
             model, tg.CreatePoint2d(sheet.Width * 0.75, sheet.Height * 0.68), _
             Math.Max(front.Scale * 0.75, 0.01), ViewOrientationTypeEnum.kIsoTopRightViewOrientation, style)
