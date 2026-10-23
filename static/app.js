@@ -286,7 +286,7 @@ function displayPanel(job) {
   const sizes = SIZE_OPTIONS.map((size) => `<option value="${size}" ${display.annotationSize === size ? "selected" : ""}>${size} in</option>`).join("");
   const lists = assembly
     ? `<label class="field"><span>Parts list</span><span><input type="checkbox" id="partsList" ${display.partsList ? "checked" : ""}> Show the parts list</span></label>
-       <label class="field"><span>Balloons</span><span><input type="checkbox" id="balloons" ${display.balloons ? "checked" : ""}> Item balloons on the isometric</span></label>`
+       <label class="field"><span>Balloons</span><span><input type="checkbox" id="balloons" ${display.balloons ? "checked" : ""}> Item balloons when the assembly has more than one part</span></label>`
     : `<p class="notes">A part has no parts list and no balloons. Those stay on assemblies.</p>`;
   return `<section class="panel">
     <h2>Style and annotations</h2>

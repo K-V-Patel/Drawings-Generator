@@ -220,7 +220,7 @@ def compose(template: dict, bom_format: dict | None, job: dict) -> list[Prim]:
     overall = model.get("overall") or {}
     authored = any(view_has_geometry((model.get("views") or {}).get(role)) for role in roles)
     balloon_role = next((role for role in ("iso", "front", "side") if role in roles), None)
-    use_balloons = source == "iam" and want_balloons and want_parts and bool(rows) and bool(balloon_role)
+    use_balloons = source == "iam" and want_balloons and want_parts and len(rows) > 1 and bool(balloon_role)
     placement = None
     if not authored and template.get("drawing_type") != "signoff":
         placement = place_third_angle(roles, area, overall, 1.15 if use_balloons else 0.0)

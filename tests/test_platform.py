@@ -188,6 +188,7 @@ def test_assembly_bom_uses_saved_format(client):
     assert "PART NO." in svg
     assert "HD-200" in svg
     assert "Parts List" in svg
+    assert 'r="0.1300"' not in svg
     assert "NORSTAR" not in svg
     csv = client.get(f"/api/jobs/{job['id']}/bom.csv").text
     assert "PART NO." in csv
@@ -715,6 +716,7 @@ def test_inventor_json_export_keeps_the_gantry_description_and_parts_list(client
     assert "H-frame gantry crane" in svg
     assert "T12455" in svg
     assert "Parts List" in svg
+    assert svg.count('r="0.1300"') == 2
     assert "181.875" in svg
     assert "60.5" in svg
     assert "1 : 100" not in svg

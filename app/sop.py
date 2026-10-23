@@ -153,6 +153,9 @@ def _parts_list(add, job, model):
         add("warn", "Parts list", "The parts list in the top left needs every part and quantity.")
         return
     add("pass", "Parts list", f"{len(rows)} item(s) in the saved BOM format.")
+    if len(rows) < 2:
+        add("pass", "Balloons", "One part does not need item balloons.")
+        return
     balloons = _symbols(model, "balloons")
     item_ids = {str(row.get("item")) for row in rows}
     balloon_ids = {str(b.get("item")) for b in balloons}

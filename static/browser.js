@@ -692,6 +692,10 @@
       return;
     }
     add("pass", "Parts list", `${rows.length} item(s) in the saved BOM format.`);
+    if (rows.length < 2) {
+      add("pass", "Balloons", "One part does not need item balloons.");
+      return;
+    }
     const balloons = symbols(model, "balloons");
     const items = new Set(rows.map((row) => String(row.item)));
     const marked = new Set(balloons.map((balloon) => String(balloon.item)));
@@ -1473,7 +1477,7 @@
     const area = [inset + 0.12, bottom, width - 2 * inset - 0.24, Math.max(top - bottom, 1)];
     const authored = roles.some((role) => geometry((model.views || {})[role]));
     const balloonRole = ["iso", "front", "side"].find((role) => roles.includes(role));
-    let useBalloons = job.sourceKind === "iam" && display.balloons && display.partsList && rows.length && balloonRole;
+    let useBalloons = job.sourceKind === "iam" && display.balloons && display.partsList && rows.length > 1 && balloonRole;
     const placement = !authored && item.drawingType !== "signoff" ? placeThirdAngle(roles, area, model.overall || {}, useBalloons ? 1.15 : 0) : null;
     const boxes = placement ? {} : allocate(roles, area, item.drawingType || "part");
     const prims = border(width, height);

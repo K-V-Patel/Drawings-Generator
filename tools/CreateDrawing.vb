@@ -4,7 +4,8 @@
 ' Creates a drawing from Standard.idw, so the border, title block, and
 ' dimension style are the Inventor template. Inventor places the front,
 ' top, and right views, plus an isometric, and adds overall dimensions.
-' An assembly also gets a parts list and item balloons.
+' An assembly also gets a parts list. When it has more than one part,
+' each part gets an item balloon.
 '
 ' The drawing is saved as the part number .idw in the sibling Drawing
 ' folder when that folder exists, otherwise beside the model. An existing
@@ -80,9 +81,11 @@ Sub Main()
         TryAddOverall(sheet, views("side"), True, tg)
         TryAddOverall(sheet, views("top"), False, tg)
 
+        Dim balloonNote As String = ""
         If model.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then
             TryAddPartsList(sheet, views("front"), tg)
-            TryAddBalloons(sheet, model, views("iso"), tg)
+            drawDoc.Update()
+            balloonNote = AddItemBalloons(sheet, model, views, tg)
         End If
         drawDoc.Update()
 
@@ -93,7 +96,9 @@ Sub Main()
         Catch ex As Exception
             jsonNote = "View curves were not written: " & ex.Message
         End Try
-        MessageBox.Show("Created " & idwPath & vbLf & jsonNote, "Drawings Generator")
+        Dim done As String = "Created " & idwPath & vbLf & jsonNote
+        If balloonNote <> "" Then done = done & vbLf & balloonNote
+        MessageBox.Show(done, "Drawings Generator")
     Catch ex As Exception
         MessageBox.Show("Could not create the drawing: " & ex.Message, "Drawings Generator")
     Finally
@@ -249,37 +254,214 @@ Sub TryAddPartsList(sheet As Sheet, front As DrawingView, tg As TransientGeometr
     End Try
 End Sub
 
-Sub TryAddBalloons(sheet As Sheet, model As Document, iso As DrawingView, tg As TransientGeometry)
+Function AddItemBalloons(sheet As Sheet, model As Document, views As Dictionary(Of String, DrawingView), tg As TransientGeometry) As String
     Try
         Dim asm As AssemblyDocument = model
-        Dim used As Double = iso.Position.Y + iso.Height / 2
-        For Each occ As ComponentOccurrence In asm.ComponentDefinition.Occurrences
-            If occ.Suppressed Then Continue For
-            Dim curves As DrawingCurvesEnumerator = Nothing
-            Try
-                curves = iso.DrawingCurves(occ)
-            Catch
-                curves = Nothing
-            End Try
-            If curves Is Nothing OrElse curves.Count = 0 Then Continue For
-            Dim curve As DrawingCurve = curves.Item(1)
-            Dim attach As Point2d = Nothing
-            Try
-                attach = curve.MidPoint
-            Catch
-                attach = Nothing
-            End Try
-            If attach Is Nothing Then Continue For
-            used -= 0.9
-            Dim tip As Point2d = tg.CreatePoint2d(iso.Position.X + iso.Width / 2 + 1.6, used)
-            Dim points As ObjectCollection = ThisApplication.TransientObjects.CreateObjectCollection()
-            points.Add(attach)
-            points.Add(tip)
-            sheet.Balloons.Add(points)
+        Dim occurrenceCount As Integer = CountOccurrences(asm)
+        Dim targets As List(Of ComponentOccurrence) = BalloonTargets(asm)
+        If targets.Count = 0 Then targets = DistinctOccurrences(asm)
+        If occurrenceCount < 2 AndAlso targets.Count < 2 Then Return ""
+        If targets.Count = 0 Then Return ""
+        Dim pitch As Double = BalloonPitch(views, targets.Count)
+        Dim nextY As New Dictionary(Of String, Double)
+        Dim placed As Integer = 0
+        Dim problem As String = ""
+        Dim roles As New List(Of String)
+        roles.Add("iso")
+        roles.Add("front")
+        roles.Add("side")
+        roles.Add("top")
+        Dim host As DrawingView = Nothing
+        Dim curve As DrawingCurve = Nothing
+        Dim found As DrawingCurve = Nothing
+        Dim chosen As String = ""
+        For Each occ As ComponentOccurrence In targets
+            host = Nothing
+            curve = Nothing
+            found = Nothing
+            chosen = ""
+            For Each role As String In roles
+                If Not views.ContainsKey(role) Then Continue For
+                found = CurveOnView(views(role), occ)
+                If found Is Nothing Then Continue For
+                host = views(role)
+                curve = found
+                chosen = role
+                Exit For
+            Next
+            If host Is Nothing OrElse curve Is Nothing OrElse chosen = "" Then Continue For
+            If Not nextY.ContainsKey(chosen) Then nextY(chosen) = host.Position.Y + host.Height / 2
+            Dim tipY As Double = nextY(chosen)
+            nextY(chosen) = tipY - pitch
+            Dim tipX As Double = host.Position.X + host.Width / 2 + 2.0
+            If tipX > sheet.Width - 2.0 Then tipX = sheet.Width - 2.0
+            Dim tip As Point2d = tg.CreatePoint2d(tipX, tipY)
+            Dim failure As String = PlaceBalloon(sheet, curve, tip)
+            If failure = "" Then
+                placed = placed + 1
+            Else
+                problem = failure
+            End If
+        Next
+        If placed > 0 Then Return "Balloons: " & placed.ToString()
+        If problem = "" Then problem = "No part curve was available to attach."
+        Return "Balloons were not placed. " & problem
+    Catch ex As Exception
+        Return "Balloons were not placed. " & ex.Message
+    End Try
+End Function
+
+Function BalloonPitch(views As Dictionary(Of String, DrawingView), count As Integer) As Double
+    Dim pitch As Double = 1.2
+    If Not views.ContainsKey("iso") Then Return pitch
+    If count < 2 Then Return pitch
+    Dim iso As DrawingView = views("iso")
+    Dim room As Double = iso.Position.Y + iso.Height / 2 - 1.5
+    If room <= 0 Then Return pitch
+    Dim needed As Double = pitch * (count - 1)
+    If needed > room Then pitch = room / (count - 1)
+    If pitch < 0.8 Then pitch = 0.8
+    Return pitch
+End Function
+
+Function CountOccurrences(asm As AssemblyDocument) As Integer
+    Dim count As Integer = 0
+    For Each occ As ComponentOccurrence In asm.ComponentDefinition.Occurrences
+        If occ.Suppressed Then Continue For
+        count = count + 1
+    Next
+    Return count
+End Function
+
+Function BalloonTargets(asm As AssemblyDocument) As List(Of ComponentOccurrence)
+    Dim targets As New List(Of ComponentOccurrence)
+    Try
+        Dim bomView As BOMView = asm.ComponentDefinition.BOM.BOMViews.Item("Structured")
+        For Each row As BOMRow In bomView.BOMRows
+            If row.ComponentDefinitions.Count = 0 Then Continue For
+            Dim occ As ComponentOccurrence = FindOccurrence(asm, row.ComponentDefinitions.Item(1))
+            If occ IsNot Nothing Then targets.Add(occ)
         Next
     Catch
     End Try
-End Sub
+    Return targets
+End Function
+
+Function DistinctOccurrences(asm As AssemblyDocument) As List(Of ComponentOccurrence)
+    Dim targets As New List(Of ComponentOccurrence)
+    Dim seen As New List(Of String)
+    For Each occ As ComponentOccurrence In asm.ComponentDefinition.Occurrences
+        If occ.Suppressed Then Continue For
+        Dim key As String = PartKey(occ)
+        If key = "" Then Continue For
+        If seen.Contains(key) Then Continue For
+        seen.Add(key)
+        targets.Add(occ)
+    Next
+    Return targets
+End Function
+
+Function FindOccurrence(asm As AssemblyDocument, def As ComponentDefinition) As ComponentOccurrence
+    For Each occ As ComponentOccurrence In asm.ComponentDefinition.Occurrences
+        If occ.Suppressed Then Continue For
+        If SameDefinition(occ, def) Then Return occ
+    Next
+    Return Nothing
+End Function
+
+Function SameDefinition(occ As ComponentOccurrence, def As ComponentDefinition) As Boolean
+    Try
+        If occ.Definition Is def Then Return True
+    Catch
+    End Try
+    Try
+        Dim occDoc As Document = occ.Definition.Document
+        Dim defDoc As Document = def.Document
+        If occDoc Is defDoc Then Return True
+        If occDoc.FullFileName <> "" AndAlso occDoc.FullFileName = defDoc.FullFileName Then Return True
+    Catch
+    End Try
+    Return False
+End Function
+
+Function PartKey(occ As ComponentOccurrence) As String
+    Try
+        Dim full As String = occ.Definition.Document.FullFileName
+        If full <> "" Then Return full
+    Catch
+    End Try
+    Try
+        Return occ.Name
+    Catch
+    End Try
+    Return ""
+End Function
+
+Function CurveOnView(view As DrawingView, occ As ComponentOccurrence) As DrawingCurve
+    Try
+        Dim curves As DrawingCurvesEnumerator = view.DrawingCurves(occ)
+        If curves Is Nothing Then Return Nothing
+        If curves.Count = 0 Then Return Nothing
+        Return curves.Item(1)
+    Catch
+        Return Nothing
+    End Try
+End Function
+
+Function PlaceBalloon(sheet As Sheet, curve As DrawingCurve, tip As Point2d) As String
+    Dim attach As Point2d = CurvePoint(curve)
+    Dim intent As GeometryIntent = Nothing
+    If attach IsNot Nothing Then
+        Try
+            intent = sheet.CreateGeometryIntent(curve, attach)
+        Catch
+            intent = Nothing
+        End Try
+    End If
+    If intent Is Nothing Then
+        Try
+            intent = sheet.CreateGeometryIntent(curve)
+        Catch
+            intent = Nothing
+        End Try
+    End If
+    Dim points As ObjectCollection = ThisApplication.TransientObjects.CreateObjectCollection()
+    If intent IsNot Nothing Then
+        points.Add(intent)
+    ElseIf attach IsNot Nothing Then
+        points.Add(attach)
+    Else
+        Return "The part curve has no attach point."
+    End If
+    points.Add(tip)
+    Try
+        sheet.Balloons.Add(points)
+        Return ""
+    Catch ex As Exception
+        If intent Is Nothing OrElse attach Is Nothing Then Return ex.Message
+    End Try
+    Dim retry As ObjectCollection = ThisApplication.TransientObjects.CreateObjectCollection()
+    retry.Add(attach)
+    retry.Add(tip)
+    Try
+        sheet.Balloons.Add(retry)
+        Return ""
+    Catch ex2 As Exception
+        Return ex2.Message
+    End Try
+End Function
+
+Function CurvePoint(curve As DrawingCurve) As Point2d
+    Try
+        Return curve.MidPoint
+    Catch
+    End Try
+    Try
+        Return curve.StartPoint
+    Catch
+    End Try
+    Return Nothing
+End Function
 
 Function SaveDrawing(drawDoc As DrawingDocument, model As Document) As String
     Dim path As String = OutputPath(model, ".idw")
