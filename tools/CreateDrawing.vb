@@ -21,11 +21,11 @@
 Imports System.Text
 Imports System.Collections.Generic
 
-' Drawing template. Use a file name from the Inventor template folder,
-' or a full path. Standard.idw is the usual shop template.
-Dim TemplateName As String = "Standard.idw"
-
 Sub Main()
+    ' Drawing template. Use a file name from the Inventor template folder,
+    ' or a full path. Standard.idw is the usual shop template.
+    Dim TemplateName As String = "Standard.idw"
+
     Dim model As Document = ThisDoc.Document
     If model.DocumentType <> DocumentTypeEnum.kPartDocumentObject AndAlso model.DocumentType <> DocumentTypeEnum.kAssemblyDocumentObject Then
         MessageBox.Show("Open a part (.ipt) or an assembly (.iam), then run this rule.", "Drawings Generator")
