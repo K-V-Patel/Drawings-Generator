@@ -493,25 +493,35 @@ Function SameOccurrence(leftOcc As ComponentOccurrence, rightOcc As ComponentOcc
 End Function
 
 Function PlaceBalloon(sheet As Sheet, curve As DrawingCurve, tip As Point2d) As String
-    Dim intent As GeometryIntent = Nothing
+    Dim lastProblem As String = "The part curve has no attach point."
+    Dim plain As GeometryIntent = Nothing
     Try
-        intent = sheet.CreateGeometryIntent(curve)
+        plain = sheet.CreateGeometryIntent(curve)
     Catch
-        intent = Nothing
+        plain = Nothing
     End Try
-    If intent Is Nothing Then
-        Dim attach As Point2d = CurvePoint(curve)
-        If attach Is Nothing Then Return "The part curve has no attach point."
-        Try
-            intent = sheet.CreateGeometryIntent(curve, attach)
-        Catch ex As Exception
-            Return ex.Message
-        End Try
+    If plain IsNot Nothing Then
+        lastProblem = AddBalloon(sheet, tip, plain)
+        If lastProblem = "" Then Return ""
     End If
-    If intent Is Nothing Then Return "The part curve has no attach point."
+    Dim attach As Point2d = CurvePoint(curve)
+    If attach Is Nothing Then Return lastProblem
+    Dim pointed As GeometryIntent = Nothing
+    Try
+        pointed = sheet.CreateGeometryIntent(curve, attach)
+    Catch ex As Exception
+        If lastProblem = "" Then lastProblem = ex.Message
+        Return lastProblem
+    End Try
+    If pointed Is Nothing Then Return lastProblem
+    Return AddBalloon(sheet, tip, pointed)
+End Function
+
+Function AddBalloon(sheet As Sheet, tip As Point2d, intent As GeometryIntent) As String
+    ' The balloon position is first. The part edge is last.
     Dim points As ObjectCollection = ThisApplication.TransientObjects.CreateObjectCollection()
-    points.Add(intent)
     points.Add(tip)
+    points.Add(intent)
     Try
         sheet.Balloons.Add(points)
         Return ""
