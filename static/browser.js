@@ -334,12 +334,12 @@
     model.overall = overall;
     job.model = model;
     job.properties = props;
-    return ["length", "width", "height"].every((key) => Number(overall[key]) > 0) && (changed || before === "{}");
+    return num(overall.length) > 0 && num(overall.width) > 0 && (changed || before === "{}");
   }
 
   function drawable(job) {
     const overall = (job.model && job.model.overall) || {};
-    const sized = ["length", "width", "height"].every((key) => num(overall[key]) > 0);
+    const sized = num(overall.length) > 0 && num(overall.width) > 0;
     if (sized) return true;
     return Object.values((job.model && job.model.views) || {}).some((view) => view && typeof view === "object" && geometry(view));
   }
@@ -504,10 +504,13 @@
       warnings.push("Part number was taken from the file name.");
     }
     overall = describedOverall(props, overall);
-    const sized = ["length", "width", "height"].every((key) => Number(overall[key]) > 0);
-    if (!sized) overall = {};
-    if (sized) warnings.push("Overall size, part number, and material were read from the file. Views show that envelope.");
-    else warnings.push("This file has no saved overall size. A sheet is not generated.");
+    const face = num(overall.length) > 0 && num(overall.width) > 0;
+    const full = face && num(overall.height) > 0;
+    if (!face) {
+      overall = {};
+      warnings.push("This file has no saved overall size. A sheet is not generated.");
+    } else if (!full) warnings.push("Length and width were read from the file. Thickness was not in the file.");
+    else warnings.push("Overall size, part number, and material were read from the file. Views show that envelope.");
     if (kind === "ipt") bomRows = [];
     const description = props.description || props.subject || props.title || "";
     return {
@@ -969,10 +972,8 @@
     return VIEW_STYLES.includes(value) ? value : "hidden-line-removed";
   }
 
-  function styleCaption(style, envelopeView) {
-    const note = { "hidden-line": "HIDDEN LINE", shaded: "SHADED", raster: "RASTER" }[style] || "";
-    if (envelopeView) return note ? `ENVELOPE · ${note}` : "ENVELOPE";
-    return note;
+  function styleCaption(style) {
+    return { "hidden-line": "HIDDEN LINE", shaded: "SHADED", raster: "RASTER" }[style] || "";
   }
 
   function faceColors(style) {
@@ -997,19 +998,22 @@
     const length = num(overall.length);
     const width = num(overall.width);
     const height = num(overall.height);
-    if (length <= 0 || width <= 0 || height <= 0) return { empty: true };
+    if (length <= 0 || width <= 0) return { empty: true };
+    const known = height > 0;
+    const visual = known ? height : Math.max(Math.min(length, width) * 0.06, 0.12);
     const style = styleName(viewStyle);
     const colors = faceColors(style);
     if (role === "iso") {
+      const isoH = known ? height : visual;
       const project = (x, y, z) => [(x - z) * Math.cos(Math.PI / 6), y + (x + z) * Math.sin(Math.PI / 6)];
       const corners = {};
-      [0, 1].forEach((i) => [0, 1].forEach((j) => [0, 1].forEach((k) => { corners[`${i}${j}${k}`] = project(i * length, j * height, k * width); })));
+      [0, 1].forEach((i) => [0, 1].forEach((j) => [0, 1].forEach((k) => { corners[`${i}${j}${k}`] = project(i * length, j * isoH, k * width); })));
       const edges = [[0, 0, 0, 1, 0, 0], [1, 0, 0, 1, 1, 0], [1, 1, 0, 0, 1, 0], [0, 1, 0, 0, 0, 0], [0, 0, 1, 1, 0, 1], [1, 0, 1, 1, 1, 1], [1, 1, 1, 0, 1, 1], [0, 1, 1, 0, 0, 1], [0, 0, 0, 0, 0, 1], [1, 0, 0, 1, 0, 1], [1, 1, 0, 1, 1, 1], [0, 1, 0, 0, 1, 1]];
       const paths = edges.map((e) => {
         const hidden = style === "hidden-line" && e[2] === 1 && e[5] === 1;
         return { pts: [corners[`${e[0]}${e[1]}${e[2]}`], corners[`${e[3]}${e[4]}${e[5]}`]], layer: hidden ? "HIDDEN" : "OBJECT", dashed: hidden };
       });
-      const view = { paths, caption: styleCaption(style, true), annotationSize };
+      const view = { paths, caption: styleCaption(style), annotationSize };
       if (colors.length) {
         const face = (keys) => keys.map((key) => corners[key]);
         view.fills = [
@@ -1020,10 +1024,12 @@
       }
       return view;
     }
-    let w = length;
-    let h = height;
-    if (["side", "end", "section"].includes(role)) { w = width; h = height; }
-    else if (["top", "bottom", "flat"].includes(role)) { w = length; h = width; }
+    let w = known ? length : length;
+    let h = known ? height : width;
+    if (["side", "end", "section"].includes(role)) { w = width; h = known ? height : visual; }
+    else if (role === "flat") { w = length; h = width; }
+    else if (["top", "bottom"].includes(role)) { w = length; h = known ? width : visual; }
+    else if (!["front", "back"].includes(role)) { w = length; h = known ? height : width; }
     const padX = Math.max(w * 0.12, 0.4);
     const padY = Math.max(h * 0.18, 0.45);
     const view = {
@@ -1032,7 +1038,7 @@
         { kind: "horizontal", x1: 0, x2: w, y: -padY, ext: 0, text: fmt(w) },
         { kind: "vertical", y1: 0, y2: h, x: -padX, ext: 0, text: fmt(h) },
       ],
-      caption: styleCaption(style, true),
+      caption: styleCaption(style),
       annotationSize,
     };
     if (colors.length) view.fills = [{ pts: [[0, 0], [w, 0], [w, h], [0, h]], fill: colors[0] }];
@@ -1223,6 +1229,146 @@
     return grid(roles, area);
   }
 
+  function profileSize(role, length, width, height) {
+    const known = height > 0;
+    const visual = known ? height : Math.max(Math.min(length, width) * 0.06, 0.12);
+    if (role === "front" || role === "back") return known ? [length, height] : [length, width];
+    if (["side", "end", "section"].includes(role)) return known ? [width, height] : [width, visual];
+    if (role === "top" || role === "bottom") return known ? [length, width] : [length, visual];
+    if (role === "flat") return [length, width];
+    return known ? [length, height] : [length, width];
+  }
+
+  const NICE_SCALES = [10, 5, 4, 2, 1, 0.5, 0.25, 0.2, 0.125, 0.1, 1 / 16, 0.05, 1 / 32, 0.02, 0.01];
+
+  function snapScale(exact) {
+    if (!(exact > 0)) return exact;
+    const fit = NICE_SCALES.filter((scale) => scale <= exact * 1.001);
+    return fit.length ? fit[0] : exact;
+  }
+
+  function scaleLabel(scale) {
+    if (scale >= 1 && Math.abs(scale - Math.round(scale)) < 1e-6) return `SCALE ${Math.round(scale)} : 1`;
+    if (scale > 0) {
+      const inverse = 1 / scale;
+      if (Math.abs(inverse - Math.round(inverse)) < 0.08) return `SCALE 1 : ${Math.round(inverse)}`;
+    }
+    return `SCALE ${scale.toFixed(3)}`;
+  }
+
+  function ownedDims(roles, height) {
+    const owned = {};
+    roles.forEach((role) => { owned[role] = { h: false, v: false }; });
+    const known = height > 0;
+    if (roles.includes("front")) {
+      owned.front = { h: true, v: true };
+      if (known && roles.includes("top")) owned.top = { h: false, v: true };
+      else if (known && roles.includes("side")) owned.side = { h: true, v: false };
+      else if (known && roles.includes("end")) owned.end = { h: true, v: false };
+    } else if (roles.includes("top")) owned.top = { h: true, v: true };
+    else if (roles.includes("side")) owned.side = { h: true, v: true };
+    return owned;
+  }
+
+  function placeThirdAngle(roles, area, overall) {
+    const length = num(overall.length);
+    const width = num(overall.width);
+    const height = num(overall.height);
+    if (!(length > 0 && width > 0)) return null;
+    let [x, y, aw, ah] = area;
+    let iso = null;
+    if (roles.includes("iso")) {
+      const isoW = Math.min(aw * 0.34, 5.6);
+      iso = [x + aw - isoW, y + ah * 0.42, isoW, ah * 0.58];
+      aw -= isoW + 0.25;
+    }
+    let flat = null;
+    if (roles.includes("flat")) {
+      const flatH = Math.min(ah * 0.3, 3.2);
+      flat = [x, y, Math.max(aw, 1), flatH];
+      y += flatH + 0.2;
+      ah -= flatH + 0.2;
+    }
+    const columns = [];
+    if (roles.includes("back") && roles.includes("front")) columns.push(["back"]);
+    const center = [];
+    if (roles.includes("bottom")) center.push("bottom");
+    if (roles.includes("front")) center.push("front");
+    else if (roles.includes("back")) center.push("back");
+    if (roles.includes("top")) center.push("top");
+    if (center.length) columns.push(center);
+    ["side", "end", "section"].forEach((role) => { if (roles.includes(role)) columns.push([role]); });
+    if (!columns.length || aw < 1.5 || ah < 1.5) return null;
+    const wh = (role) => profileSize(role, length, width, height);
+    const gap = 0.85;
+    const modelW = columns.reduce((sum, column) => sum + Math.max(...column.map((role) => wh(role)[0])), 0);
+    const modelH = Math.max(...columns.map((column) => column.reduce((sum, role) => sum + wh(role)[1], 0)));
+    const gapsX = Math.max(columns.length - 1, 0);
+    const gapsY = Math.max(...columns.map((column) => Math.max(column.length - 1, 0)));
+    const availW = aw - 1.3;
+    const availH = ah - 1.15;
+    if (!(modelW > 0 && modelH > 0 && availW > 0.5 && availH > 0.5)) return null;
+    const scale = snapScale(Math.min((availW - gap * gapsX) / modelW, (availH - gap * gapsY) / modelH));
+    const sheetW = modelW * scale + gap * gapsX;
+    const sheetH = modelH * scale + gap * gapsY;
+    let cursorX = x + 0.7 + Math.max(0, (availW - sheetW) / 2);
+    const originY = y + 0.7 + Math.max(0, (availH - sheetH) / 2);
+    const placed = {};
+    columns.forEach((column) => {
+      let cursorY = originY;
+      const columnW = Math.max(...column.map((role) => wh(role)[0]));
+      column.forEach((role) => {
+        const [mw, mh] = wh(role);
+        placed[role] = { ox: cursorX + ((columnW - mw) * scale) / 2, oy: cursorY, mw, mh };
+        cursorY += mh * scale + gap;
+      });
+      cursorX += columnW * scale + gap;
+    });
+    return { views: placed, scale, base: placed.front ? "front" : Object.keys(placed)[0], iso, flat };
+  }
+
+  function sheetSpan(x1, y1, x2, y2, value, size, bold, horizontal) {
+    const prims = [line(x1, y1, x2, y2, "DIM"), arrow(x1, y1, x2, y2), arrow(x2, y2, x1, y1)];
+    if (horizontal) prims.push(text((x1 + x2) / 2, y1 + 0.06, value, size, "middle", bold));
+    else prims.push(text(x1 - 0.06, (y1 + y2) / 2, value, size, "end", bold));
+    return prims;
+  }
+
+  function renderPlaced(view, role, label, place) {
+    const { scale } = place;
+    const { ox, oy, mw, mh } = place;
+    const prims = [];
+    const project = (px, py) => [ox + px * scale, oy + py * scale];
+    const ann = num(view.annotationSize, 0.1) > 0 ? num(view.annotationSize, 0.1) : 0.1;
+    const bold = view.annotationStyle === "bold";
+    (view.fills || []).forEach((fill) => {
+      const pts = (fill.pts || []).map(([px, py]) => project(num(px), num(py)));
+      if (pts.length >= 3) prims.push(solid(pts, fill.fill || ""));
+    });
+    (view.paths || []).forEach((path) => {
+      const pts = (path.pts || []).map(([px, py]) => project(num(px), num(py)));
+      const layer = path.layer || "OBJECT";
+      if (pts.length >= 2) prims.push(poly(pts, layer, !!path.dashed || layer === "CENTER" || layer === "HIDDEN"));
+    });
+    const dims = view.dims || [];
+    dims.forEach((dim) => {
+      if (dim.kind === "horizontal") prims.push(...sheetSpan(ox, oy - 0.36, ox + mw * scale, oy - 0.36, dim.text || "", ann, bold, true));
+      else if (dim.kind === "vertical") prims.push(...sheetSpan(ox - 0.42, oy, ox - 0.42, oy + mh * scale, dim.text || "", ann, bold, false));
+    });
+    const titleText = label || ROLE_LABELS[role] || String(role).toUpperCase();
+    const nameY = oy - (dims.some((dim) => dim.kind === "horizontal") ? 0.62 : 0.28);
+    prims.push(text(ox + (mw * scale) / 2, nameY, titleText, 0.1, "middle", true));
+    if (place.scaleText) prims.push(text(ox + (mw * scale) / 2, nameY - 0.16, place.scaleText, 0.08, "middle"));
+    (view.balloons || []).forEach((balloon) => {
+      const [nx, ny] = project(num(balloon.nx), num(balloon.ny));
+      const [bx, by] = project(num(balloon.x), num(balloon.y));
+      prims.push(circle(nx, ny, 0.13, "THIN"));
+      prims.push(text(nx, ny - 0.035, String(balloon.item ?? ""), 0.09, "middle", true));
+      prims.push(line(nx, ny, bx, by, "THIN"));
+    });
+    return prims;
+  }
+
   function compose(item, fmt, job) {
     const width = num(item.sheetWidthIn);
     const height = num(item.sheetHeightIn);
@@ -1255,17 +1401,37 @@
     let top = height - inset - 0.16;
     const bottom = inset + tbH + 0.28;
     if (tableBox && item.drawingType !== "part") top = Math.min(top, tableBox[1] - 0.1);
-    const boxes = allocate(roles, [inset + 0.12, bottom, width - 2 * inset - 0.24, Math.max(top - bottom, 1)], item.drawingType || "part");
+    const area = [inset + 0.12, bottom, width - 2 * inset - 0.24, Math.max(top - bottom, 1)];
+    const authored = roles.some((role) => geometry((model.views || {})[role]));
+    const placement = !authored && item.drawingType !== "signoff" ? placeThirdAngle(roles, area, model.overall || {}) : null;
+    const boxes = placement ? {} : allocate(roles, area, item.drawingType || "part");
     const prims = border(width, height);
     const balloonRole = ["iso", "front", "side"].find((role) => roles.includes(role));
     const useBalloons = job.sourceKind === "iam" && display.balloons && display.partsList && rows.length && balloonRole;
+    const owned = placement ? ownedDims(roles, num((model.overall || {}).height)) : {};
     roles.forEach((role) => {
-      const box = boxes[role];
-      if (!box) return;
-      const authored = (model.views || {})[role];
-      let view = geometry(authored) ? applyStyle(authored, display) : envelope(role, model.overall || {}, display.viewStyle, display.annotationSize);
+      const authoredView = (model.views || {})[role];
+      let view = geometry(authoredView) ? applyStyle(authoredView, display) : envelope(role, model.overall || {}, display.viewStyle, display.annotationSize);
       if (view && !view.empty) view = { ...view, annotationStyle: display.annotationStyle, annotationSize: display.annotationSize };
       if (useBalloons && role === balloonRole) view = attachBalloons(view, rows);
+      if (placement && placement.views[role]) {
+        const keep = owned[role] || { h: false, v: false };
+        view = {
+          ...view,
+          caption: "",
+          dims: (view.dims || []).filter((dim) => (dim.kind === "horizontal" && keep.h) || (dim.kind === "vertical" && keep.v)),
+        };
+        prims.push(...renderPlaced(view, role, labels[role] || "", {
+          ...placement.views[role],
+          scale: placement.scale,
+          scaleText: role === placement.base ? scaleLabel(placement.scale) : "",
+        }));
+        return;
+      }
+      let box = boxes[role];
+      if (placement && role === "iso" && placement.iso) box = placement.iso;
+      else if (placement && role === "flat" && placement.flat) box = placement.flat;
+      if (!box) return;
       prims.push(...renderView(view, role, labels[role] || "", box));
     });
     if (tableBox && spec) prims.push(...dataTable(...tableBox, spec[0], spec[1], rows));

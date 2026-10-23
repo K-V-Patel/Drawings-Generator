@@ -4,7 +4,19 @@ from __future__ import annotations
 
 from app.drawing.frame import BLOCK_W, BORDER_INSET, border, data_table, signoff_block, title_block, title_block_height
 from app.drawing.prims import Prim, text
-from app.drawing.views import ROLE_LABELS, apply_view_style, attach_balloons, envelope_view, render_view, view_has_geometry, view_style_name
+from app.drawing.views import (
+    ROLE_LABELS,
+    apply_view_style,
+    attach_balloons,
+    envelope_view,
+    owned_dims,
+    place_third_angle,
+    render_placed,
+    render_view,
+    scale_label,
+    view_has_geometry,
+    view_style_name,
+)
 
 
 def _box(x, y, w, h):
@@ -198,20 +210,62 @@ def compose(template: dict, bom_format: dict | None, job: dict) -> list[Prim]:
     if table_box and template.get("drawing_type") != "part":
         top = min(top, table_box[1] - 0.1)
     area = (inset + 0.12, bottom, width - 2 * inset - 0.24, max(top - bottom, 1))
-    boxes = allocate(roles, area, table_box, template.get("drawing_type") or "part")
+    overall = model.get("overall") or {}
+    authored = any(view_has_geometry((model.get("views") or {}).get(role)) for role in roles)
+    placement = None
+    if not authored and template.get("drawing_type") != "signoff":
+        placement = place_third_angle(roles, area, overall)
+    boxes = {} if placement else allocate(roles, area, table_box, template.get("drawing_type") or "part")
+    if placement:
+        covered = set(placement["views"])
+        if placement.get("iso"):
+            covered.add("iso")
+        if placement.get("flat"):
+            covered.add("flat")
+        rest = [role for role in roles if role not in covered]
+        if rest:
+            boxes = _grid(rest, area)
 
     prims: list[Prim] = []
     prims.extend(border(width, height))
     balloon_role = next((role for role in ("iso", "front", "side") if role in roles), None)
     use_balloons = source == "iam" and want_balloons and want_parts and bool(rows) and bool(balloon_role)
+    try:
+        length = float(overall.get("length") or 0)
+        width_in = float(overall.get("width") or 0)
+        height_in = float(overall.get("height") or 0)
+    except (TypeError, ValueError):
+        length, width_in, height_in = 0, 0, 0
+    owned = owned_dims(roles, length, width_in, height_in) if placement else {}
     for role in roles:
-        box = boxes.get(role)
-        if not box:
-            continue
         view = _resolve(model, role, style, ann, annotation)
         if use_balloons and role == balloon_role:
             view = attach_balloons(view, rows)
-        prims.extend(render_view(view, role, label_for.get(role, ""), box))
+        label = label_for.get(role, "")
+        placed = placement["views"].get(role) if placement else None
+        if placed:
+            view = dict(view)
+            keep = owned.get(role) or {"h": False, "v": False}
+            view["dims"] = [
+                dim for dim in (view.get("dims") or [])
+                if (dim.get("kind") == "horizontal" and keep["h"]) or (dim.get("kind") == "vertical" and keep["v"])
+            ]
+            view["caption"] = ""
+            prims.extend(render_placed(view, role, label, {
+                **placed,
+                "scale": placement["scale"],
+                "scaleText": scale_label(placement["scale"]) if role == placement["base"] else "",
+            }))
+            continue
+        if placement and role == "iso" and placement.get("iso"):
+            box = placement["iso"]
+        elif placement and role == "flat" and placement.get("flat"):
+            box = placement["flat"]
+        else:
+            box = boxes.get(role)
+        if not box:
+            continue
+        prims.extend(render_view(view, role, label, box))
     if table_box and spec:
         prims.extend(data_table(*table_box, spec[0], spec[1], rows))
     prims.extend(title_block(*tb, company, props))

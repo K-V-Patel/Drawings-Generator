@@ -265,7 +265,7 @@ def _drawable(job: dict) -> bool:
     model = job.get("model") or {}
     overall = model.get("overall") or {}
     try:
-        sized = all(float(overall.get(key) or 0) > 0 for key in ("length", "width", "height"))
+        sized = all(float(overall.get(key) or 0) > 0 for key in ("length", "width"))
     except (TypeError, ValueError):
         sized = False
     if sized:

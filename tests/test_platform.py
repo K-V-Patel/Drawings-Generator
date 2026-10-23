@@ -247,7 +247,8 @@ def test_inventor_schema_text_is_not_a_part_number(client):
     svg = client.get(f"/api/jobs/{job['id']}/sheet.svg").text
     assert "Plate" in svg
     assert "InternalName" not in svg
-    assert "ENVELOPE" in svg
+    assert "FRONT" in svg
+    assert "SCALE" in svg
     assert "NO PROFILE" not in svg
 
 
@@ -327,7 +328,8 @@ def test_ipt_parameters_are_read_and_the_sheet_opens(client):
     svg = client.get(f"/api/jobs/{job['id']}/sheet.svg").text
     assert "box" in svg
     assert "Generic" in svg
-    assert "ENVELOPE" in svg
+    assert "FRONT" in svg
+    assert "SCALE" in svg
     assert "NO PROFILE" not in svg
 
 
@@ -388,7 +390,8 @@ def test_description_supplies_the_overall_size(client):
     assert generated.json()["model"]["overall"]["height"] == pytest.approx(0.25)
     svg = client.get(f"/api/jobs/{saved.json()['id']}/sheet.svg").text
     assert "T12454" in svg
-    assert "ENVELOPE" in svg
+    assert "FRONT" in svg
+    assert "SCALE" in svg
     assert "3.750" in svg or "3.75" in svg
     beam = "UPDATE***I-beam - W 6 x 9 (5.9 x 3.94) - 31.6"
     beam_size = size_from_text(beam)
@@ -396,6 +399,31 @@ def test_description_supplies_the_overall_size(client):
     assert beam_size["width"] == pytest.approx(3.94)
     assert beam_size["height"] == pytest.approx(5.9)
     assert set(beam_size) == {"length", "width", "height"}
+    caster = "2408T71_Easy-Turn Caster with 6-5-8 x 4-3-4 Plate"
+    caster_size = size_from_text(caster)
+    assert caster_size["length"] == pytest.approx(6.625)
+    assert caster_size["width"] == pytest.approx(4.75)
+    assert "height" not in caster_size
+    assert size_from_text("W 6 x 9") == {}
+    caster_job = client.post("/api/jobs", json={
+        "fileName": "T12455.ipt",
+        "fileKind": "ipt",
+        "properties": {"partNumber": "T12455", "description": caster},
+        "model": {"kind": "part", "overall": {}, "views": {}},
+    })
+    assert caster_job.status_code == 200, caster_job.text
+    caster_sheet = client.post(f"/api/jobs/{caster_job.json()['id']}/generate")
+    assert caster_sheet.status_code == 200, caster_sheet.text
+    assert caster_sheet.json()["model"]["overall"]["length"] == pytest.approx(6.625)
+    assert caster_sheet.json()["model"]["overall"]["width"] == pytest.approx(4.75)
+    assert not str(caster_sheet.json()["properties"].get("thickness") or "").strip()
+    caster_svg = client.get(f"/api/jobs/{caster_job.json()['id']}/sheet.svg").text
+    assert "6.625" in caster_svg
+    assert "4.75" in caster_svg
+    assert "FRONT" in caster_svg
+    assert "SIDE" in caster_svg
+    assert "SCALE" in caster_svg
+    assert "Parts List" not in caster_svg
 
 
 def test_beam_sheet_and_inventor_view_styles(client):
@@ -420,7 +448,8 @@ def test_beam_sheet_and_inventor_view_styles(client):
     assert "5.9" in svg
     assert "3.94" in svg
     assert "Parts List" not in svg
-    assert "ENVELOPE" in svg
+    assert "FRONT" in svg
+    assert "SCALE" in svg
     assert "RASTER" not in svg
     roles = [view["role"] for view in client.get("/api/templates").json()[0]["views"]]
     for role in ("front", "side", "top", "bottom", "back", "end", "iso", "flat"):
@@ -571,6 +600,7 @@ context.drawgenBrowser.handle("api/jobs", {
     const svg = String(file.body);
     console.log(JSON.stringify({
       length: found.length, width: found.width, height: found.height, plate: found.plate,
+      caster: context.drawgenInventor.sizeFromText("2408T71_Easy-Turn Caster with 6-5-8 x 4-3-4 Plate"),
       overall: sheet.model.overall,
       thickness: sheet.properties.thickness || "",
       raster: svg.includes("RASTER"),
@@ -584,6 +614,9 @@ context.drawgenBrowser.handle("api/jobs", {
     beam = subprocess.run(["node", "-e", beam_script], cwd=ROOT, check=True, capture_output=True, text=True)
     beam_payload = json.loads(beam.stdout)
     assert beam_payload["plate"] is False
+    assert beam_payload["caster"]["length"] == pytest.approx(6.625)
+    assert beam_payload["caster"]["width"] == pytest.approx(4.75)
+    assert "height" not in beam_payload["caster"]
     assert beam_payload["length"] == pytest.approx(31.6)
     assert beam_payload["width"] == pytest.approx(3.94)
     assert beam_payload["height"] == pytest.approx(5.9)

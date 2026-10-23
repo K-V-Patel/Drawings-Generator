@@ -248,7 +248,7 @@ def _trim(value: float) -> str:
     return f"{value:.4f}".rstrip("0").rstrip(".")
 
 
-_SIZE_TOKEN = r"(?:\d+\s+\d+/\d+|\d+-\d+/\d+|\d+/\d+|\d+(?:\.\d+)?|\.\d+|¼|½|¾|⅛|⅜|⅝|⅞)"
+_SIZE_TOKEN = r"(?:\d+\s+\d+/\d+|\d+-\d+/\d+|\d+-\d+-\d+|\d+/\d+|\d+(?:\.\d+)?|\.\d+|¼|½|¾|⅛|⅜|⅝|⅞)"
 _SIZE_TRIPLE = re.compile(
     rf"(?:^|[^\w.])(?P<a>{_SIZE_TOKEN})\s*(?P<ua>in(?:ch(?:es)?)?|mm|cm|\")?\s*[x×]\s*"
     rf"(?P<b>{_SIZE_TOKEN})\s*(?P<ub>in(?:ch(?:es)?)?|mm|cm|\")?\s*[x×]\s*"
@@ -267,14 +267,21 @@ _SIZE_LENGTH = re.compile(
     rf"[-–—]\s*(?P<n>{_SIZE_TOKEN})\s*(?P<u>in(?:ch(?:es)?)?|mm|cm|\")?",
     re.IGNORECASE,
 )
+_SIZE_OPEN = re.compile(
+    rf"(?:^|[^\w.])(?P<a>{_SIZE_TOKEN})\s*(?P<ua>in(?:ch(?:es)?)?|mm|cm|\")?\s*[x×]\s*"
+    rf"(?P<b>{_SIZE_TOKEN})\s*(?P<ub>in(?:ch(?:es)?)?|mm|cm|\")?",
+    re.IGNORECASE,
+)
+_SECTION_NAME = re.compile(r"(?:^|[\s*_])(?:W|S|M|C|L|HP|MC|WT|HSS)\s*$", re.IGNORECASE)
 
 
 def size_from_text(text: str) -> dict:
     """Overall inches from a description.
 
-    A plate is written 3.75 x 3.75 x 1/4. A beam is written
-    W 6 x 9 (5.9 x 3.94) - 31.6: the parentheses are the section and the
-    number after the dash is the cut length. The W 6 x 9 name is not the size.
+    A plate is written 3.75 x 3.75 x 1/4, or 6-5-8 x 4-3-4 for 6-5/8 x 4-3/4.
+    A beam is written W 6 x 9 (5.9 x 3.94) - 31.6: the parentheses are the
+    section and the number after the dash is the cut length. The W 6 x 9 name
+    is not the size.
     """
     if not text:
         return {}
@@ -287,17 +294,27 @@ def size_from_text(text: str) -> dict:
         if _positive(length) and _positive(width) and _positive(height):
             return {"length": _round(length), "width": _round(width), "height": _round(height)}
     pair = _SIZE_PAIR.search(raw)
-    if not pair:
-        return {}
-    length_match = _SIZE_LENGTH.search(raw[pair.end():])
-    if not length_match:
-        return {}
-    depth = _token_inches(pair.group("a"), pair.group("ua"))
-    flange = _token_inches(pair.group("b"), pair.group("ub"))
-    length = _token_inches(length_match.group("n"), length_match.group("u"))
-    if not (_positive(depth) and _positive(flange) and _positive(length)):
-        return {}
-    return {"length": _round(length), "width": _round(flange), "height": _round(depth)}
+    if pair:
+        length_match = _SIZE_LENGTH.search(raw[pair.end():])
+        if length_match:
+            depth = _token_inches(pair.group("a"), pair.group("ua"))
+            flange = _token_inches(pair.group("b"), pair.group("ub"))
+            length = _token_inches(length_match.group("n"), length_match.group("u"))
+            if _positive(depth) and _positive(flange) and _positive(length):
+                return {"length": _round(length), "width": _round(flange), "height": _round(depth)}
+        else:
+            depth = _token_inches(pair.group("a"), pair.group("ua"))
+            flange = _token_inches(pair.group("b"), pair.group("ub"))
+            if _positive(depth) and _positive(flange):
+                return {"length": _round(depth), "width": _round(flange)}
+    for open_pair in _SIZE_OPEN.finditer(raw):
+        if _SECTION_NAME.search(raw[:open_pair.start()]):
+            continue
+        length = _token_inches(open_pair.group("a"), open_pair.group("ua"))
+        width = _token_inches(open_pair.group("b"), open_pair.group("ub"))
+        if _positive(length) and _positive(width):
+            return {"length": _round(length), "width": _round(width)}
+    return {}
 
 
 def apply_described_size(properties: dict | None, overall: dict | None) -> tuple[dict, dict, bool]:
@@ -312,9 +329,10 @@ def apply_described_size(properties: dict | None, overall: dict | None) -> tuple
         return props, size, False
     changed = False
     for key in ("length", "width", "height"):
-        if not _positive(size.get(key)):
-            size[key] = found[key]
-            changed = True
+        if key not in found or _positive(size.get(key)):
+            continue
+        size[key] = found[key]
+        changed = True
     # The third number of a plate is the thickness. A beam depth is not.
     if changed and not str(props.get("thickness") or "").strip() and _SIZE_TRIPLE.search(text):
         props["thickness"] = _trim(found["height"])
@@ -338,7 +356,16 @@ def _token_inches(token: str, unit: str | None) -> float | None:
                 return None
             number = float(numerator) / float(denominator)
         else:
-            number = float(token)
+            hyphen = re.fullmatch(r"(\d+)-(\d+)-(\d+)", token)
+            if hyphen:
+                whole = int(hyphen.group(1))
+                numerator = int(hyphen.group(2))
+                denominator = int(hyphen.group(3))
+                if denominator not in {2, 4, 8, 16, 32, 64} or not 0 < numerator < denominator:
+                    return None
+                number = whole + numerator / denominator
+            else:
+                number = float(token)
     if unit:
         return inches_from(f"{number} {unit}")
     return inches_from(number)

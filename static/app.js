@@ -180,7 +180,7 @@ async function upload(file) {
 
 function hasOverall(job) {
   const overall = (job.model && job.model.overall) || {};
-  return ["length", "width", "height"].every((key) => Number(overall[key]) > 0);
+  return Number(overall.length) > 0 && Number(overall.width) > 0;
 }
 
 function describedSize(job) {

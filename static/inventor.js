@@ -492,7 +492,7 @@ thickness values are converted to inches and become the sheet envelope.
     return null;
   }
 
-  const SIZE_TOKEN = "(?:\\d+\\s+\\d+/\\d+|\\d+-\\d+/\\d+|\\d+/\\d+|\\d+(?:\\.\\d+)?|\\.\\d+|[¼½¾⅛⅜⅝⅞])";
+  const SIZE_TOKEN = "(?:\\d+\\s+\\d+/\\d+|\\d+-\\d+/\\d+|\\d+-\\d+-\\d+|\\d+/\\d+|\\d+(?:\\.\\d+)?|\\.\\d+|[¼½¾⅛⅜⅝⅞])";
   const SIZE_TRIPLE = new RegExp(
     `(?:^|[^\\w.])(${SIZE_TOKEN})\\s*(in(?:ch(?:es)?)?|mm|cm|")?\\s*[x×]\\s*(${SIZE_TOKEN})\\s*(in(?:ch(?:es)?)?|mm|cm|")?\\s*[x×]\\s*(${SIZE_TOKEN})\\s*(in(?:ch(?:es)?)?|mm|cm|")?`,
     "i",
@@ -513,7 +513,15 @@ thickness values are converted to inches and become the sheet envelope.
         const denominator = Number(parts[1]);
         if (!denominator) return null;
         number = Number(parts[0]) / denominator;
-      } else number = Number(token);
+      } else {
+        const hyphen = /^(\d+)-(\d+)-(\d+)$/.exec(token);
+        if (hyphen) {
+          const denominator = Number(hyphen[3]);
+          const numerator = Number(hyphen[2]);
+          if (![2, 4, 8, 16, 32, 64].includes(denominator) || !(numerator > 0 && numerator < denominator)) return null;
+          number = Number(hyphen[1]) + numerator / denominator;
+        } else number = Number(token);
+      }
     }
     if (!Number.isFinite(number) || number <= 0) return null;
     return unit ? inchesFrom(`${number} ${unit}`) : inchesFrom(number);
@@ -524,6 +532,11 @@ thickness values are converted to inches and become the sheet envelope.
     "i",
   );
   const SIZE_LENGTH = new RegExp(`[-–—]\\s*(${SIZE_TOKEN})\\s*(in(?:ch(?:es)?)?|mm|cm|")?`, "i");
+  const SIZE_OPEN = new RegExp(
+    `(?:^|[^\\w.])(${SIZE_TOKEN})\\s*(in(?:ch(?:es)?)?|mm|cm|")?\\s*[x×]\\s*(${SIZE_TOKEN})\\s*(in(?:ch(?:es)?)?|mm|cm|")?`,
+    "gi",
+  );
+  const SECTION_NAME = /(?:^|[\s*_])(?:W|S|M|C|L|HP|MC|WT|HSS)\s*$/i;
 
   function sizeFromText(text) {
     const raw = String(text || "");
@@ -535,14 +548,30 @@ thickness values are converted to inches and become the sheet envelope.
       if (length > 0 && width > 0 && height > 0) return { length: round(length), width: round(width), height: round(height), plate: true };
     }
     const pair = SIZE_PAIR.exec(raw);
-    if (!pair) return null;
-    const lengthMatch = SIZE_LENGTH.exec(raw.slice(pair.index + pair[0].length));
-    if (!lengthMatch) return null;
-    const depth = tokenInches(pair[1], pair[2]);
-    const flange = tokenInches(pair[3], pair[4]);
-    const length = tokenInches(lengthMatch[1], lengthMatch[2]);
-    if (!(depth > 0 && flange > 0 && length > 0)) return null;
-    return { length: round(length), width: round(flange), height: round(depth), plate: false };
+    if (pair) {
+      const lengthMatch = SIZE_LENGTH.exec(raw.slice(pair.index + pair[0].length));
+      if (lengthMatch) {
+        const depth = tokenInches(pair[1], pair[2]);
+        const flange = tokenInches(pair[3], pair[4]);
+        const length = tokenInches(lengthMatch[1], lengthMatch[2]);
+        if (depth > 0 && flange > 0 && length > 0) return { length: round(length), width: round(flange), height: round(depth), plate: false };
+      } else {
+        const depth = tokenInches(pair[1], pair[2]);
+        const flange = tokenInches(pair[3], pair[4]);
+        if (depth > 0 && flange > 0) return { length: round(depth), width: round(flange), plate: false };
+      }
+    }
+    SIZE_OPEN.lastIndex = 0;
+    let open = SIZE_OPEN.exec(raw);
+    while (open) {
+      if (!SECTION_NAME.test(raw.slice(0, open.index))) {
+        const length = tokenInches(open[1], open[2]);
+        const width = tokenInches(open[3], open[4]);
+        if (length > 0 && width > 0) return { length: round(length), width: round(width), plate: false };
+      }
+      open = SIZE_OPEN.exec(raw);
+    }
+    return null;
   }
 
   const root = typeof globalThis !== "undefined" ? globalThis : window;

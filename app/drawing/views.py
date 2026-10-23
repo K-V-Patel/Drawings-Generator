@@ -42,11 +42,8 @@ def view_style_name(value) -> str:
     return style if style in VIEW_STYLES else "hidden-line-removed"
 
 
-def _style_caption(style: str, envelope: bool) -> str:
-    note = _STYLE_NOTE.get(style, "")
-    if envelope:
-        return f"ENVELOPE · {note}" if note else "ENVELOPE"
-    return note
+def _style_caption(style: str, envelope: bool = False) -> str:
+    return _STYLE_NOTE.get(style, "")
 
 
 def _face_colors(style: str) -> list[str]:
@@ -57,23 +54,161 @@ def _face_colors(style: str) -> list[str]:
     return []
 
 
+def profile_size(role: str, length: float, width: float, height: float) -> tuple[float, float]:
+    """Model width and height of one orthographic view.
+
+    With no thickness, the front view is the plate face and the projected
+    views are a thin edge. That edge is not a measured thickness.
+    """
+    known = height > 0
+    visual = height if known else max(min(length, width) * 0.06, 0.12)
+    if role in {"front", "back"}:
+        return (length, height) if known else (length, width)
+    if role in {"side", "end", "section"}:
+        return (width, height) if known else (width, visual)
+    if role in {"top", "bottom"}:
+        return (length, width) if known else (length, visual)
+    if role == "flat":
+        return length, width
+    return (length, height) if known else (length, width)
+
+
+def owned_dims(roles: list[str], length: float, width: float, height: float) -> dict:
+    """Each overall axis is dimensioned once, on the view where it is easiest to read."""
+    owned = {role: {"h": False, "v": False} for role in roles}
+    known = height > 0
+    if "front" in roles:
+        owned["front"] = {"h": True, "v": True}
+        if known and "top" in roles:
+            owned["top"] = {"h": False, "v": True}
+        elif known and "side" in roles:
+            owned["side"] = {"h": True, "v": False}
+        elif known and "end" in roles:
+            owned["end"] = {"h": True, "v": False}
+    elif "top" in roles:
+        owned["top"] = {"h": True, "v": True}
+    elif "side" in roles:
+        owned["side"] = {"h": True, "v": True}
+    return owned
+
+
+_NICE_SCALES = (10, 5, 4, 2, 1, 0.5, 0.25, 0.2, 0.125, 0.1, 1 / 16, 0.05, 1 / 32, 0.02, 0.01)
+
+
+def snap_scale(exact: float) -> float:
+    if exact <= 0:
+        return exact
+    fit = [scale for scale in _NICE_SCALES if scale <= exact * 1.001]
+    return fit[0] if fit else exact
+
+
+def scale_label(scale: float) -> str:
+    if scale >= 1 and abs(scale - round(scale)) < 1e-6:
+        return f"SCALE {int(round(scale))} : 1"
+    if scale > 0:
+        inverse = 1 / scale
+        if abs(inverse - round(inverse)) < 0.08:
+            return f"SCALE 1 : {int(round(inverse))}"
+    return f"SCALE {scale:.3f}"
+
+
+def place_third_angle(roles: list[str], area, overall: dict) -> dict | None:
+    """Inventor third-angle arrangement: top above front, right side beside front, iso at the upper right."""
+    length = _as_float(overall.get("length"))
+    width = _as_float(overall.get("width"))
+    height = _as_float(overall.get("height"))
+    if length <= 0 or width <= 0:
+        return None
+    x, y, aw, ah = area
+    roles = list(roles)
+    iso_box = None
+    if "iso" in roles:
+        iso_w = min(aw * 0.34, 5.6)
+        iso_box = (x + aw - iso_w, y + ah * 0.42, iso_w, ah * 0.58)
+        aw -= iso_w + 0.25
+    flat_box = None
+    if "flat" in roles:
+        flat_h = min(ah * 0.30, 3.2)
+        flat_box = (x, y, max(aw, 1), flat_h)
+        y += flat_h + 0.2
+        ah -= flat_h + 0.2
+    columns = []
+    if "back" in roles and "front" in roles:
+        columns.append(["back"])
+    center = []
+    if "bottom" in roles:
+        center.append("bottom")
+    if "front" in roles:
+        center.append("front")
+    elif "back" in roles:
+        center.append("back")
+    if "top" in roles:
+        center.append("top")
+    if center:
+        columns.append(center)
+    for role in ("side", "end", "section"):
+        if role in roles:
+            columns.append([role])
+    if not columns or aw < 1.5 or ah < 1.5:
+        return None
+
+    def wh(role):
+        return profile_size(role, length, width, height)
+
+    gap = 0.85
+    model_w = sum(max(wh(role)[0] for role in column) for column in columns)
+    model_h = max(sum(wh(role)[1] for role in column) for column in columns)
+    gaps_x = max(len(columns) - 1, 0)
+    gaps_y = max(max(len(column) - 1, 0) for column in columns)
+    avail_w = aw - 1.3
+    avail_h = ah - 1.15
+    if model_w <= 0 or model_h <= 0 or avail_w <= 0.5 or avail_h <= 0.5:
+        return None
+    exact = min((avail_w - gap * gaps_x) / model_w, (avail_h - gap * gaps_y) / model_h)
+    scale = snap_scale(exact)
+    sheet_w = model_w * scale + gap * gaps_x
+    sheet_h = model_h * scale + gap * gaps_y
+    cursor_x = x + 0.7 + max(0, (avail_w - sheet_w) / 2)
+    origin_y = y + 0.7 + max(0, (avail_h - sheet_h) / 2)
+    placed = {}
+    for column in columns:
+        cursor_y = origin_y
+        column_w = max(wh(role)[0] for role in column)
+        for role in column:
+            mw, mh = wh(role)
+            placed[role] = {
+                "ox": cursor_x + (column_w - mw) * scale / 2,
+                "oy": cursor_y,
+                "mw": mw,
+                "mh": mh,
+            }
+            cursor_y += mh * scale + gap
+        cursor_x += column_w * scale + gap
+    base = "front" if "front" in placed else next(iter(placed))
+    return {"views": placed, "scale": scale, "base": base, "iso": iso_box, "flat": flat_box}
+
+
 def envelope_view(role: str, overall: dict, view_style: str = "hidden-line-removed", annotation_size: float = 0.10) -> dict:
     length = _as_float(overall.get("length"))
     width = _as_float(overall.get("width"))
     height = _as_float(overall.get("height"))
-    if length <= 0 or width <= 0 or height <= 0:
+    if length <= 0 or width <= 0:
         return {"empty": True}
+    known = height > 0
+    visual = height if known else max(min(length, width) * 0.06, 0.12)
     style = view_style_name(view_style)
     if role == "iso":
-        return _iso_box(length, width, height, style, annotation_size)
+        return _iso_box(length, width, height if known else visual, style, annotation_size)
     if role in {"front", "back"}:
-        w, h = length, height
+        w, h = (length, height) if known else (length, width)
     elif role in {"side", "end", "section"}:
-        w, h = width, height
-    elif role in {"top", "bottom", "flat"}:
+        w, h = (width, height) if known else (width, visual)
+    elif role in {"top", "bottom"}:
+        w, h = (length, width) if known else (length, visual)
+    elif role == "flat":
         w, h = length, width
     else:
-        w, h = length, height
+        w, h = (length, height) if known else (length, width)
     pad_x = max(w * 0.12, 0.4)
     pad_y = max(h * 0.18, 0.45)
     view = {
@@ -215,6 +350,54 @@ def _sample_arc(a: dict) -> list[tuple[float, float]]:
         ang = math.radians(a0 + sweep * i / 8)
         pts.append((cx + r * math.cos(ang), cy + r * math.sin(ang)))
     return pts
+
+
+def _sheet_span(x1, y1, x2, y2, value, size, bold, horizontal: bool) -> list[Prim]:
+    prims = [line(x1, y1, x2, y2, layer="DIM"), _arrow(x1, y1, x2, y2), _arrow(x2, y2, x1, y1)]
+    if horizontal:
+        prims.append(text((x1 + x2) / 2, y1 + 0.06, value, size=size, anchor="middle", bold=bold))
+    else:
+        prims.append(text(x1 - 0.06, (y1 + y2) / 2, value, size=size, anchor="end", bold=bold))
+    return prims
+
+
+def render_placed(view: dict, role: str, label: str, place: dict) -> list[Prim]:
+    """Draw one orthographic view at a shared third-angle scale."""
+    scale = float(place["scale"])
+    ox, oy = float(place["ox"]), float(place["oy"])
+    mw, mh = float(place["mw"]), float(place["mh"])
+    prims: list[Prim] = []
+
+    def p(px, py):
+        return ox + px * scale, oy + py * scale
+
+    ann = _as_float((view or {}).get("annotationSize"), 0.10) or 0.10
+    bold = str((view or {}).get("annotationStyle") or "") == "bold"
+    for fill in (view or {}).get("fills") or []:
+        pts = [p(px, py) for px, py in fill.get("pts") or []]
+        if len(pts) >= 3:
+            prims.append(solid(pts, fill=str(fill.get("fill") or "")))
+    for path in (view or {}).get("paths") or []:
+        pts = [p(px, py) for px, py in path.get("pts") or []]
+        if len(pts) >= 2:
+            layer = path.get("layer") or "OBJECT"
+            dashed = bool(path.get("dashed")) or layer in {"CENTER", "HIDDEN"}
+            prims.append(poly(pts, layer=layer, dashed=dashed))
+    dims = (view or {}).get("dims") or []
+    for dim in dims:
+        if dim.get("kind") == "horizontal":
+            prims.extend(_sheet_span(ox, oy - 0.36, ox + mw * scale, oy - 0.36, dim.get("text", ""), ann, bold, True))
+        elif dim.get("kind") == "vertical":
+            prims.extend(_sheet_span(ox - 0.42, oy, ox - 0.42, oy + mh * scale, dim.get("text", ""), ann, bold, False))
+    title = label or ROLE_LABELS.get(role, role.upper())
+    name_y = oy - (0.62 if any(dim.get("kind") == "horizontal" for dim in dims) else 0.28)
+    prims.append(text(ox + mw * scale / 2, name_y, title, size=0.10, anchor="middle", bold=True))
+    scale_text = place.get("scaleText") or ""
+    if scale_text:
+        prims.append(text(ox + mw * scale / 2, name_y - 0.16, scale_text, size=0.08, anchor="middle"))
+    for balloon in (view or {}).get("balloons") or []:
+        prims.extend(_balloon(balloon, p))
+    return prims
 
 
 def render_view(view: dict, role: str, label: str, box: tuple[float, float, float, float]) -> list[Prim]:

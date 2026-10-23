@@ -110,10 +110,19 @@ def from_inventor(filename: str, data: bytes, kind: str) -> dict:
         warnings.append("Part number was taken from the file name.")
     description = props.get("description") or props.get("subject") or props.get("title") or ""
     props, overall, _described = apply_described_size(props, overall)
-    sized = all(float(overall.get(key) or 0) > 0 for key in ("length", "width", "height"))
-    if not sized:
+    def _dim(key: str) -> float:
+        try:
+            return float(overall.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    face = _dim("length") > 0 and _dim("width") > 0
+    full = face and _dim("height") > 0
+    if not face:
         overall = {}
         warnings.append("This file has no saved overall size. A sheet is not generated.")
+    elif not full:
+        warnings.append("Length and width were read from the file. Thickness was not in the file.")
     else:
         warnings.append("Overall size, part number, and material were read from the file. Views show that envelope.")
     if kind == "ipt":
