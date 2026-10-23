@@ -297,12 +297,13 @@ Function WriteCurves(model As Document, views As Dictionary(Of String, DrawingVi
         fileKind = "iam"
         modelKind = "assembly"
     End If
-    Dim viewJson As New StringBuilder()
+    Dim viewBody As New StringBuilder()
     Dim firstView As Boolean = True
     For Each pair As KeyValuePair(Of String, DrawingView) In views
-        If Not firstView Then viewJson.Append(",")
+        If Not firstView Then viewBody.Append(",")
         firstView = False
-        viewJson.Append("""" & pair.Key & """:" & ViewJson(pair.Value, pair.Key <> "iso", culture))
+        Dim withDims As Boolean = pair.Key <> "iso"
+        viewBody.Append("""" & pair.Key & """:" & FormatView(pair.Value, withDims, culture))
     Next
     Dim bom As String = ""
     If fileKind = "iam" Then bom = BomJson(model)
@@ -324,14 +325,14 @@ Function WriteCurves(model As Document, views As Dictionary(Of String, DrawingVi
             """overall"":{""length"":" & lengthIn.ToString("0.###", culture) & ",""width"":" & widthIn.ToString("0.###", culture) & ",""height"":" & heightIn.ToString("0.###", culture) & "}," & _
             """bends"":[]," & _
             """components"":[" & bom & "]," & _
-            """views"":{" & viewJson.ToString() & "}" & _
+            """views"":{" & viewBody.ToString() & "}" & _
         "}" & _
     "}"
     System.IO.File.WriteAllText(path, json, New UTF8Encoding(False))
     Return "Curves: " & path
 End Function
 
-Function ViewJson(view As DrawingView, withDims As Boolean, culture As System.Globalization.CultureInfo) As String
+Function FormatView(view As DrawingView, withDims As Boolean, culture As System.Globalization.CultureInfo) As String
     Dim paths As New StringBuilder()
     Dim first As Boolean = True
     Dim minX As Double = 1.0E+30
@@ -357,7 +358,7 @@ Function ViewJson(view As DrawingView, withDims As Boolean, culture As System.Gl
         End If
         paths.Append("{""pts"":[")
         For i As Integer = 0 To pts.Count - 1
-            Dim local = ModelInches(view, pts(i))
+            Dim local() As Double = ModelInches(view, pts(i))
             If i > 0 Then paths.Append(",")
             paths.Append("[" & local(0).ToString("0.###", culture) & "," & local(1).ToString("0.###", culture) & "]")
             minX = Math.Min(minX, local(0))
@@ -387,8 +388,8 @@ Function CurvePoints(curve As DrawingCurve) As List(Of Point2d)
         If kind.Contains("Circle") AndAlso Not kind.Contains("Arc") Then
             Dim center As Point2d = curve.CenterPoint
             Dim radius As Double = center.DistanceTo(curve.StartPoint)
-            For step As Integer = 0 To 16
-                Dim angle As Double = 2 * Math.PI * step / 16
+            For pointIndex As Integer = 0 To 16
+                Dim angle As Double = 2 * Math.PI * pointIndex / 16
                 pts.Add(ThisApplication.TransientGeometry.CreatePoint2d(center.X + radius * Math.Cos(angle), center.Y + radius * Math.Sin(angle)))
             Next
             Return pts
@@ -406,8 +407,8 @@ Function CurvePoints(curve As DrawingCurve) As List(Of Point2d)
                 Dim midA As Double = Math.Atan2(curve.MidPoint.Y - center.Y, curve.MidPoint.X - center.X)
                 Dim radius As Double = center.DistanceTo(curve.StartPoint)
                 Dim sweep As Double = SweepThrough(startA, endA, midA)
-                For step As Integer = 0 To 8
-                    Dim angle As Double = startA + sweep * step / 8
+                For pointIndex As Integer = 0 To 8
+                    Dim angle As Double = startA + sweep * pointIndex / 8
                     pts.Add(ThisApplication.TransientGeometry.CreatePoint2d(center.X + radius * Math.Cos(angle), center.Y + radius * Math.Sin(angle)))
                 Next
                 Return pts
