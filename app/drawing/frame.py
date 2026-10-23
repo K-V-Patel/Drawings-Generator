@@ -243,6 +243,16 @@ def _person(name, date) -> str:
     return name or date
 
 
+def fit_line(value: str, width_in: float, size: float) -> str:
+    text = " ".join(str(value or "").split())
+    if not text:
+        return ""
+    max_chars = max(4, int((width_in - 0.08) / (size * 0.52)))
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "…"
+
+
 def data_table(x, y, w, h, title: str, columns: list[dict], rows: list[dict]) -> list[Prim]:
     """Table with its top at y+h and its bottom at y (Y up)."""
     prims = [rect(x, y, w, h, layer="TABLE")]
@@ -269,7 +279,7 @@ def data_table(x, y, w, h, title: str, columns: list[dict], rows: list[dict]) ->
         for col in columns:
             cw = w * float(col.get("width") or 0)
             value = "" if not rows else row.get(col.get("key"), "")
-            prims.append(text(cursor + 0.05, row_top - row_h * 0.68, str(value), size=0.07))
+            prims.append(text(cursor + 0.05, row_top - row_h * 0.68, fit_line(value, cw, 0.07), size=0.07))
             cursor += cw
     return prims
 

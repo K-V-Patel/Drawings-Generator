@@ -88,7 +88,7 @@
 
   function acceptable(value) {
     const text = String(value ?? "").trim();
-    if (!text || text.length > 240) return false;
+    if (!text || text.length > 800) return false;
     const lowered = text.toLowerCase();
     if (SCHEMA.some((marker) => lowered.includes(marker))) return false;
     if (/[{}<>]/.test(text)) return false;
@@ -571,10 +571,14 @@
       const stream = new Blob([slice]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
       text = new TextDecoder().decode(await new Response(stream).arrayBuffer());
     } else throw new Error("Could not read the zip export.");
-    const parsed = fromDrawgen(JSON.parse(text), entry.name.split("/").pop());
+    const parsed = fromDrawgen(parseJsonText(text), entry.name.split("/").pop());
     const cad = entries.find((item) => /\.(ipt|iam)$/i.test(item.name));
     if (cad && !parsed.fileName) parsed.fileName = cad.name.split("/").pop();
     return parsed;
+  }
+
+  function parseJsonText(text) {
+    return JSON.parse(String(text).replace(/^\uFEFF/, ""));
   }
 
   async function parseUpload(file) {
@@ -583,7 +587,7 @@
     const lower = name.toLowerCase();
     const data = await file.arrayBuffer();
     if (lower.endsWith(".zip")) return unzipJson(data);
-    if (lower.endsWith(".json")) return fromDrawgen(JSON.parse(new TextDecoder().decode(data)), name);
+    if (lower.endsWith(".json")) return fromDrawgen(parseJsonText(new TextDecoder().decode(data)), name);
     return fromInventor(name, data, lower.endsWith(".iam") ? "iam" : "ipt");
   }
 
@@ -635,7 +639,7 @@
     if (roles.length < 2) add("fail", "View count", "A production sheet needs at least 2 views.");
     else add("pass", "View count", `${roles.length} views. Minimum is 2.`);
     if (roles.length && roles.every((role) => !hasProfile(role))) {
-      add("warn", "Profiles", "These views are overall envelopes. Drop a drawgen.json from Inventor before the sheet is issued.");
+      add("warn", "Profiles", "These views are the overall envelope. The file has no view curves.");
     } else add("pass", "Profiles", "At least one view has model geometry.");
     if (blank(props.partNumber) || blank(props.description)) add("warn", "Drawing identity", "Part number and description both belong in the title block.");
     else add("pass", "Drawing identity", `${props.partNumber} — ${props.description}`);
@@ -781,6 +785,14 @@
       if (cur) lines.push(cur);
     });
     return lines;
+  }
+
+  function fitLine(value, widthIn, size) {
+    const text = String(value ?? "").trim().replace(/\s+/g, " ");
+    if (!text) return "";
+    const maxChars = Math.max(4, Math.floor((widthIn - 0.08) / (size * 0.52)));
+    if (text.length <= maxChars) return text;
+    return `${text.slice(0, maxChars - 1).trimEnd()}…`;
   }
 
   const BORDER_INSET = 0.50;
@@ -938,7 +950,8 @@
       cursor = x;
       columns.forEach((col) => {
         const cw = w * num(col.width);
-        prims.push(text(cursor + 0.05, rowTop - rowH * 0.68, rows.length ? String(row[col.key] ?? "") : "", 0.07));
+        const shown = rows.length ? fitLine(row[col.key], cw, 0.07) : "";
+        prims.push(text(cursor + 0.05, rowTop - rowH * 0.68, shown, 0.07));
         cursor += cw;
       });
     });

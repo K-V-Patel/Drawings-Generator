@@ -30,7 +30,9 @@ def acceptable_property(value) -> bool:
     text. That schema is not a part number, description, or material.
     """
     text = str(value or "").strip()
-    if not text or len(text) > 240:
+    # Shop descriptions are a short paragraph. The gantry crane note is 294
+    # characters. Longer text is the Inventor property schema, not a title.
+    if not text or len(text) > 800:
         return False
     lowered = text.lower()
     if any(marker in lowered for marker in _SCHEMA_MARKERS):
@@ -76,12 +78,21 @@ PROP_NAMES = {
 }
 
 
+def _load_json(data: bytes) -> dict:
+    # Inventor's Encoding.UTF8 writes a BOM. JSON.parse rejects that byte.
+    text = data.decode("utf-8-sig")
+    payload = json.loads(text)
+    if not isinstance(payload, dict):
+        raise ValueError("The JSON export has to be an object.")
+    return payload
+
+
 def parse_upload(filename: str, data: bytes) -> dict:
     lower = filename.lower()
     if lower.endswith(".zip"):
         return _from_zip(filename, data)
     if lower.endswith(".json"):
-        return from_drawgen(json.loads(data.decode("utf-8")), filename)
+        return from_drawgen(_load_json(data), filename)
     kind = "iam" if lower.endswith(".iam") else "ipt"
     return from_inventor(filename, data, kind)
 
@@ -303,7 +314,7 @@ def _from_zip(filename: str, data: bytes) -> dict:
             names = [name for name in bundle.namelist() if name.lower().endswith(".json") and not name.startswith("__MACOSX")]
             if not names:
                 raise ValueError("The zip needs a drawgen.json export.")
-            payload = json.loads(bundle.read(names[0]).decode("utf-8"))
+            payload = _load_json(bundle.read(names[0]))
             parsed = from_drawgen(payload, names[0].split("/")[-1])
             cad = [name for name in bundle.namelist() if name.lower().endswith((".ipt", ".iam"))]
             if cad and not parsed.get("fileName"):

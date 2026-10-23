@@ -660,3 +660,61 @@ def test_old_branded_templates_are_replaced(tmp_path, monkeypatch):
         names = [item["name"] for item in replaced.get("/api/templates").json()]
         assert names == ["Standard.idw", "Standard.dwg", "Sign off"]
         assert replaced.get("/api/bom-formats").json()[0]["name"] == "Parts list"
+
+
+def test_inventor_json_export_keeps_the_gantry_description_and_parts_list(client):
+    description = (
+        "1,000 lb H-frame gantry crane. Easy-Turn casters with a 7.75 in mounting height. "
+        "Steel frame is 11 ft 0 in from the bottom of the outrigger to the top of the runway. "
+        "Caster plates are welded to the outrigger ends. Casters are fillet-welded to those plates. "
+        "Hoist and runway trolleys stay loose."
+    )
+    assert len(description) > 240
+    payload = {
+        "schema": "drawgen/1",
+        "fileName": "PGC H Frame Gantry Crane.iam",
+        "fileKind": "iam",
+        "properties": {
+            "partNumber": "PGC H Frame Gantry Crane",
+            "description": description,
+            "material": "",
+            "thickness": "",
+            "designer": "Krupa Patel",
+            "drawnBy": "Krupa Patel",
+        },
+        "model": {
+            "kind": "assembly",
+            "overall": {"length": 181.875, "width": 145.95, "height": 60.5},
+            "bends": [],
+            "components": [
+                {"item": "3", "partNumber": "T12455", "description": "2468T71_Easy-Turn Caster with 6-5-8 x 4-3-4 Plate", "qty": "4"},
+                {"item": "5", "partNumber": "T12461", "description": "PGC H Frame Gantry Crane Frame Weldment", "qty": "1"},
+            ],
+            "views": {},
+        },
+    }
+    raw = "\ufeff".encode("utf-8") + json.dumps(payload).encode("utf-8")
+    uploaded = client.post(
+        "/api/jobs",
+        files={"file": ("PGC H Frame Gantry Crane.drawgen.json", raw, "application/json")},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    job = uploaded.json()
+    assert job["sourceKind"] == "iam"
+    assert job["bomReady"] is True
+    assert job["properties"]["description"] == description
+    assert job["model"]["overall"]["length"] == pytest.approx(181.875)
+    assert [row["partNumber"] for row in job["bomRows"]] == ["T12455", "T12461"]
+    generated = client.post(f"/api/jobs/{job['id']}/generate")
+    assert generated.status_code == 200, generated.text
+    sheet = generated.json()
+    assert sheet["model"]["overall"]["length"] == pytest.approx(181.875)
+    assert sheet["model"]["overall"]["width"] == pytest.approx(145.95)
+    assert sheet["model"]["overall"]["height"] == pytest.approx(60.5)
+    svg = client.get(f"/api/jobs/{job['id']}/sheet.svg").text
+    assert "H-frame gantry crane" in svg
+    assert "T12455" in svg
+    assert "Parts List" in svg
+    assert "181.875" in svg
+    assert "60.5" in svg
+    assert any("no view curves" in item["detail"] for item in sheet["sop"])

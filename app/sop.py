@@ -60,7 +60,7 @@ def review(template: dict, job: dict) -> list[dict]:
         add(
             "warn",
             "Profiles",
-            "These views are overall envelopes. Drop a drawgen.json from Inventor before the sheet is issued.",
+            "These views are the overall envelope. The file has no view curves.",
         )
     else:
         add("pass", "Profiles", "At least one view has model geometry.")
