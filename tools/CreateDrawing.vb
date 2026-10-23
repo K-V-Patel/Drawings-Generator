@@ -879,19 +879,19 @@ Function CurvePoints(curve As DrawingCurve) As List(Of Point2d)
     Try
         If kind.Contains("Circle") AndAlso Not kind.Contains("Arc") Then
             Dim center As Point2d = Nothing
-            Dim startPt As Point2d = Nothing
+            Dim rimPoint As Point2d = Nothing
             Try
                 center = curve.CenterPoint
             Catch
                 center = Nothing
             End Try
             Try
-                startPt = curve.StartPoint
+                rimPoint = curve.StartPoint
             Catch
-                startPt = Nothing
+                rimPoint = Nothing
             End Try
-            If center IsNot Nothing AndAlso startPt IsNot Nothing Then
-                Dim radius As Double = center.DistanceTo(startPt)
+            If center IsNot Nothing AndAlso rimPoint IsNot Nothing Then
+                Dim radius As Double = center.DistanceTo(rimPoint)
                 AddArcSamples(pts, center, radius, 0, 2 * HalfTurn(), 16)
                 Return pts
             End If
