@@ -604,17 +604,12 @@ Sub FitPartsListColumns(table As PartsList)
 End Sub
 
 Function ColumnKind(col As PartsListColumn) As Integer
+    ' PropertyTypeEnum has no parts-list members, so the heading text decides the column.
     Dim title As String = ""
     Try
         If col.Title IsNot Nothing Then title = col.Title.ToUpper()
     Catch
         title = ""
-    End Try
-    Try
-        If col.PropertyType = PropertyTypeEnum.kItemPartsListProperty Then Return 1
-        If col.PropertyType = PropertyTypeEnum.kQuantityPartsListProperty Then Return 2
-        If col.PropertyType = PropertyTypeEnum.kPartNumberPartsListProperty Then Return 3
-    Catch
     End Try
     If title.Contains("QTY") OrElse title.Contains("QUANTITY") Then Return 2
     If title.Contains("ITEM") Then Return 1
