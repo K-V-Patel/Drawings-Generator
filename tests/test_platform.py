@@ -390,6 +390,80 @@ def test_description_supplies_the_overall_size(client):
     assert "T12454" in svg
     assert "ENVELOPE" in svg
     assert "3.750" in svg or "3.75" in svg
+    beam = "UPDATE***I-beam - W 6 x 9 (5.9 x 3.94) - 31.6"
+    beam_size = size_from_text(beam)
+    assert beam_size["length"] == pytest.approx(31.6)
+    assert beam_size["width"] == pytest.approx(3.94)
+    assert beam_size["height"] == pytest.approx(5.9)
+    assert set(beam_size) == {"length", "width", "height"}
+
+
+def test_beam_sheet_and_inventor_view_styles(client):
+    beam = "UPDATE***I-beam - W 6 x 9 (5.9 x 3.94) - 31.6"
+    saved = client.post("/api/jobs", json={
+        "fileName": "T12452.ipt",
+        "fileKind": "ipt",
+        "properties": {"partNumber": "T12452", "description": beam},
+        "model": {"kind": "part", "overall": {}, "views": {}},
+    })
+    assert saved.status_code == 200, saved.text
+    job = saved.json()
+    generated = client.post(f"/api/jobs/{job['id']}/generate")
+    assert generated.status_code == 200, generated.text
+    body = generated.json()
+    assert body["model"]["overall"]["length"] == pytest.approx(31.6)
+    assert body["model"]["overall"]["width"] == pytest.approx(3.94)
+    assert body["model"]["overall"]["height"] == pytest.approx(5.9)
+    assert not str(body["properties"].get("thickness") or "").strip()
+    svg = client.get(f"/api/jobs/{job['id']}/sheet.svg").text
+    assert "31.6" in svg
+    assert "5.9" in svg
+    assert "3.94" in svg
+    assert "Parts List" not in svg
+    assert "ENVELOPE" in svg
+    assert "RASTER" not in svg
+    roles = [view["role"] for view in client.get("/api/templates").json()[0]["views"]]
+    for role in ("front", "side", "top", "bottom", "back", "end", "iso", "flat"):
+        assert role in roles
+    styled = client.put(f"/api/jobs/{job['id']}", json={
+        "templateId": job["templateId"],
+        "viewCount": 3,
+        "selectedViews": ["front", "side", "iso"],
+        "properties": body["properties"],
+        "model": {
+            "kind": "part",
+            "overall": body["model"]["overall"],
+            "views": {},
+            "display": {"viewStyle": "raster", "annotationSize": 0.18, "annotationStyle": "bold", "balloons": True, "partsList": True},
+        },
+        "bomRows": [{"item": "1", "partNumber": "SHOULD-NOT-LIST", "description": "no", "qty": "1"}],
+    })
+    assert styled.status_code == 200, styled.text
+    again = client.post(f"/api/jobs/{job['id']}/generate")
+    assert again.status_code == 200, again.text
+    raster = client.get(f"/api/jobs/{job['id']}/sheet.svg").text
+    assert "RASTER" in raster
+    assert 'font-size="0.1800"' in raster
+    assert "#b7b2a8" in raster
+    assert "Parts List" not in raster
+    assert "SHOULD-NOT-LIST" not in raster
+    hidden = client.put(f"/api/jobs/{job['id']}", json={
+        "templateId": job["templateId"],
+        "selectedViews": ["front", "iso"],
+        "viewCount": 2,
+        "properties": body["properties"],
+        "model": {
+            "kind": "part",
+            "overall": body["model"]["overall"],
+            "views": {},
+            "display": {"viewStyle": "hidden-line", "annotationSize": 0.12},
+        },
+    })
+    assert hidden.status_code == 200, hidden.text
+    client.post(f"/api/jobs/{job['id']}/generate")
+    dashed = client.get(f"/api/jobs/{job['id']}/sheet.svg").text
+    assert "HIDDEN LINE" in dashed
+    assert "stroke-dasharray" in dashed
 
 
 def test_browser_reader_matches_the_sample_part():
@@ -471,6 +545,55 @@ context.drawgenBrowser.handle("api/jobs", {
     assert payload["overall"]["height"] == pytest.approx(0.25)
     assert float(payload["thickness"]) == pytest.approx(0.25)
     assert payload["partNumber"] == "T12454"
+    beam_script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const context = { console, TextDecoder, TextEncoder, URL, Blob, crypto: require("crypto").webcrypto };
+context.globalThis = context;
+context.window = context;
+vm.createContext(context);
+vm.runInContext(fs.readFileSync("static/inventor.js", "utf8"), context);
+vm.runInContext(fs.readFileSync("static/browser.js", "utf8"), context);
+const beam = "UPDATE***I-beam - W 6 x 9 (5.9 x 3.94) - 31.6";
+const found = context.drawgenInventor.sizeFromText(beam);
+context.drawgenBrowser.handle("api/jobs", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    fileName: "T12452.ipt",
+    fileKind: "ipt",
+    properties: { partNumber: "T12452", description: beam },
+    model: { kind: "part", overall: {}, views: {}, display: { viewStyle: "raster", annotationSize: 0.18, balloons: true, partsList: true } },
+  }),
+}).then((job) => context.drawgenBrowser.handle("api/jobs/" + job.id + "/generate", { method: "POST" }))
+  .then((sheet) => {
+    const file = context.drawgenBrowser.buildFile(sheet.id, "sheet.svg");
+    const svg = String(file.body);
+    console.log(JSON.stringify({
+      length: found.length, width: found.width, height: found.height, plate: found.plate,
+      overall: sheet.model.overall,
+      thickness: sheet.properties.thickness || "",
+      raster: svg.includes("RASTER"),
+      size: svg.includes('font-size="0.1800"'),
+      fill: svg.includes("#b7b2a8"),
+      parts: svg.includes("Parts List"),
+      dim: svg.includes("31.6") && svg.includes("5.9") && svg.includes("3.94"),
+    }));
+  }).catch((error) => { console.error(error); process.exit(1); });
+"""
+    beam = subprocess.run(["node", "-e", beam_script], cwd=ROOT, check=True, capture_output=True, text=True)
+    beam_payload = json.loads(beam.stdout)
+    assert beam_payload["plate"] is False
+    assert beam_payload["length"] == pytest.approx(31.6)
+    assert beam_payload["width"] == pytest.approx(3.94)
+    assert beam_payload["height"] == pytest.approx(5.9)
+    assert beam_payload["overall"]["length"] == pytest.approx(31.6)
+    assert beam_payload["thickness"] == ""
+    assert beam_payload["raster"] is True
+    assert beam_payload["size"] is True
+    assert beam_payload["fill"] is True
+    assert beam_payload["parts"] is False
+    assert beam_payload["dim"] is True
 
 
 def test_extra_templates_are_refused(client):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from xml.sax.saxutils import escape
 
+from reportlab.lib.colors import HexColor
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as pdfcanvas
@@ -35,6 +36,13 @@ def _arc_points(cx: float, cy: float, r: float, a0: float, a1: float, steps: int
         a = math.radians(a0 + sweep * i / n)
         pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
     return pts
+
+
+def _svg_fill(value: str) -> str:
+    text = (value or "").strip()
+    if len(text) == 7 and text.startswith("#") and all(ch in "0123456789abcdefABCDEF" for ch in text[1:]):
+        return text
+    return "#1b1916"
 
 
 def to_svg(prims: list[Prim], width: float, height: float) -> str:
@@ -79,7 +87,7 @@ def to_svg(prims: list[Prim], width: float, height: float) -> str:
             )
         elif prim.op == "solid":
             d = " ".join(f"{x:.4f},{y:.4f}" for x, y in prim.pts)
-            parts.append(f'<polygon points="{d}" fill="#1b1916" stroke="none"/>')
+            parts.append(f'<polygon points="{d}" fill="{_svg_fill(prim.fill)}" stroke="none"/>')
         elif prim.op == "text" and prim.text:
             weight = "700" if prim.bold else "500"
             anchor = {"start": "start", "middle": "middle", "end": "end"}.get(prim.anchor, "start")
@@ -137,12 +145,14 @@ def to_pdf(prims: list[Prim], width: float, height: float, title: str = "Drawing
                 path.lineTo(X(px), Y(py))
             c.drawPath(path, stroke=1, fill=0)
         elif prim.op == "solid" and len(prim.pts) >= 3:
+            c.setFillColor(HexColor(_svg_fill(prim.fill)))
             path = c.beginPath()
             path.moveTo(X(prim.pts[0][0]), Y(prim.pts[0][1]))
             for px, py in prim.pts[1:]:
                 path.lineTo(X(px), Y(py))
             path.close()
             c.drawPath(path, stroke=0, fill=1)
+            c.setFillColorRGB(0.106, 0.098, 0.086)
         elif prim.op == "text" and prim.text:
             font = _FONT_BOLD if prim.bold else _FONT
             c.setFont(font, prim.size * 72)

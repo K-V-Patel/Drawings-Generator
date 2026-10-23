@@ -35,6 +35,8 @@ STANDARD_VIEWS = [
     {"role": "end", "label": "END"},
     {"role": "iso", "label": "ISOMETRIC"},
     {"role": "flat", "label": "FLAT PATTERN"},
+    {"role": "bottom", "label": "BOTTOM"},
+    {"role": "back", "label": "BACK"},
 ]
 
 SIGNOFF_VIEWS = [
@@ -139,6 +141,7 @@ def install_shop_templates() -> None:
         have = {row["id"] for row in conn.execute("SELECT id FROM templates")}
         for template in TEMPLATES:
             if template["id"] in have:
+                _merge_views(conn, template, timestamp)
                 continue
             conn.execute(
                 """
@@ -167,6 +170,30 @@ def install_shop_templates() -> None:
         )
         conn.execute("DELETE FROM jobs WHERE sample = 1")
         _retire_false_sheets(conn, timestamp)
+
+
+def _merge_views(conn, template: dict, timestamp: str) -> None:
+    """Add view roles that the shop list gained. Stored labels stay as they are."""
+    row = conn.execute("SELECT body_json FROM templates WHERE id = ?", (template["id"],)).fetchone()
+    if not row:
+        return
+    body = loads(row["body_json"], {})
+    if not isinstance(body, dict):
+        return
+    views = list(body.get("views") or [])
+    have = {view.get("role") for view in views if isinstance(view, dict)}
+    added = False
+    for view in template["body"].get("views") or []:
+        if view.get("role") not in have:
+            views.append(dict(view))
+            added = True
+    if not added:
+        return
+    body["views"] = views
+    conn.execute(
+        "UPDATE templates SET body_json = ?, updated_at = ? WHERE id = ?",
+        (dumps(body), timestamp, template["id"]),
+    )
 
 
 def _install_formats(conn, timestamp: str) -> None:

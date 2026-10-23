@@ -108,7 +108,9 @@ async function boot() {
       }
       renderJob();
     } else if (name === "sheet" && id) {
-      state.job = await api(`/api/jobs/${id}`);
+      [state.job, state.templates] = await Promise.all([
+        api(`/api/jobs/${id}`), api("/api/templates"),
+      ]);
       renderSheet();
     } else if (name === "library") {
       state.jobs = await api("/api/jobs");
@@ -229,6 +231,7 @@ function renderJob() {
           </label>
           <p class="notes">${esc(template.sopNotes || "")}</p>
         </section>
+        ${displayPanel(job)}
         <section class="panel">
           <h2>How many views are needed?</h2>
           <p class="notes">Minimum 2. The count turns on the first views in this template. Click a view to change the set.</p>
@@ -254,6 +257,50 @@ function renderJob() {
       </div>
     </form>`;
   bindJob();
+}
+
+const STYLE_OPTIONS = [
+  ["hidden-line-removed", "Hidden line removed"],
+  ["hidden-line", "Hidden line"],
+  ["shaded", "Shaded"],
+  ["raster", "Raster"],
+];
+const SIZE_OPTIONS = ["0.10", "0.12", "0.18", "0.24"];
+
+function savedDisplay(job) {
+  const display = (job.model && job.model.display) || {};
+  const size = String(display.annotationSize ?? "");
+  return {
+    viewStyle: STYLE_OPTIONS.some(([id]) => id === display.viewStyle) ? display.viewStyle : "hidden-line-removed",
+    annotationSize: SIZE_OPTIONS.includes(size) ? size : "0.10",
+    annotationStyle: display.annotationStyle === "bold" ? "bold" : "standard",
+    balloons: display.balloons !== false,
+    partsList: display.partsList !== false,
+  };
+}
+
+function displayPanel(job) {
+  const display = savedDisplay(job);
+  const assembly = job.sourceKind === "iam";
+  const styles = STYLE_OPTIONS.map(([id, label]) => `<option value="${id}" ${display.viewStyle === id ? "selected" : ""}>${label}</option>`).join("");
+  const sizes = SIZE_OPTIONS.map((size) => `<option value="${size}" ${display.annotationSize === size ? "selected" : ""}>${size} in</option>`).join("");
+  const lists = assembly
+    ? `<label class="field"><span>Parts list</span><span><input type="checkbox" id="partsList" ${display.partsList ? "checked" : ""}> Show the parts list</span></label>
+       <label class="field"><span>Balloons</span><span><input type="checkbox" id="balloons" ${display.balloons ? "checked" : ""}> Item balloons on the isometric</span></label>`
+    : `<p class="notes">A part has no parts list and no balloons. Those stay on assemblies.</p>`;
+  return `<section class="panel">
+    <h2>Style and annotations</h2>
+    <div class="grid-2">
+      <label class="field">View style<select id="viewStyle">${styles}</select></label>
+      <label class="field">Annotation size<select id="annotationSize">${sizes}</select></label>
+      <label class="field">Annotation style<select id="annotationStyle">
+        <option value="standard" ${display.annotationStyle === "standard" ? "selected" : ""}>Standard</option>
+        <option value="bold" ${display.annotationStyle === "bold" ? "selected" : ""}>Bold</option>
+      </select></label>
+    </div>
+    ${lists}
+    <p class="notes">Hidden line removed, hidden line, shaded, and raster are the Inventor view styles. The title block stays on the template border.</p>
+  </section>`;
 }
 
 function field(label, key, value) {
@@ -349,8 +396,8 @@ function collectRows(root, name) {
   });
 }
 
-function collectJob() {
-  const root = document.getElementById("jobForm");
+function collectJob(root) {
+  root = root || document.getElementById("jobForm");
   const job = state.job;
   const props = { ...(job.properties || {}) };
   root.querySelectorAll("[data-prop]").forEach((input) => { props[input.dataset.prop] = input.value; });
@@ -361,6 +408,20 @@ function collectJob() {
   root.querySelectorAll("[data-overall]").forEach((input) => { model.overall[input.dataset.overall] = input.value; });
   const bends = collectRows(root, "bend");
   if (bends) model.bends = bends;
+  const style = root.querySelector("#viewStyle");
+  if (style) {
+    const size = Number((root.querySelector("#annotationSize") || {}).value || 0.10);
+    const assembly = job.sourceKind === "iam";
+    model.display = {
+      viewStyle: style.value,
+      annotationSize: Number.isFinite(size) && size > 0 ? size : 0.10,
+      annotationStyle: (root.querySelector("#annotationStyle") || {}).value === "bold" ? "bold" : "standard",
+      balloons: assembly ? !!(root.querySelector("#balloons") && root.querySelector("#balloons").checked) : false,
+      partsList: assembly ? !!(root.querySelector("#partsList") && root.querySelector("#partsList").checked) : false,
+    };
+  } else if (job.model && job.model.display) {
+    model.display = job.model.display;
+  }
   const selectedViews = [...root.querySelectorAll(".chip.on")].map((chip) => chip.dataset.role);
   const templateId = (root.querySelector("input[name=template]:checked") || {}).value || job.templateId;
   const formatSelect = root.querySelector("select[name=bomFormat]");
@@ -434,7 +495,8 @@ function toggleChip(chip) {
   const on = [...document.querySelectorAll(".chip.on")];
   if (chip.classList.contains("on") && on.length <= 2) return;
   chip.classList.toggle("on");
-  document.getElementById("viewCount").value = String(document.querySelectorAll(".chip.on").length);
+  const count = document.getElementById("viewCount");
+  if (count) count.value = String(document.querySelectorAll(".chip.on").length);
 }
 
 async function persist(body, rerender) {
@@ -466,6 +528,10 @@ function renderSheet() {
   document.querySelector("main").classList.add("wide");
   const job = state.job;
   const props = job.properties || {};
+  const template = currentTemplate() || { views: [] };
+  const selected = new Set(job.selectedViews || []);
+  const chips = (template.views || []).map((view) => `
+    <button type="button" class="chip ${selected.has(view.role) ? "on" : ""}" data-role="${esc(view.role)}">${esc(view.label || view.role)}</button>`).join("");
   const checks = (job.sop || []).map((item) => `
     <div class="check ${esc(item.status)}"><strong>${esc(item.rule)}</strong><span>${esc(item.detail)}</span></div>`).join("");
   const behind = job.status === "draft" && job.hasSheet
@@ -491,10 +557,25 @@ function renderSheet() {
     <div class="sheet-page">
       <div class="sheet-scroll" id="sheetScroll">${job.hasSheet ? `<img id="sheetImg" alt="Production drawing for ${esc(props.partNumber || "this part")}" src="${esc(svg.download ? svg.url : `${svg.url}?v=${Date.now()}`)}">` : ""}</div>
       <aside>
+        <form id="sheetForm" class="stack">
+          <section class="panel">
+            <h2>Views</h2>
+            <p class="notes">Every view on this template. At least two stay on.</p>
+            <div class="views">${chips}</div>
+          </section>
+          ${displayPanel(job)}
+          <button class="btn primary" type="submit">Update drawing</button>
+        </form>
         <h2>SOP check</h2>
         <div class="checks">${checks || "<p class='muted'>Generate the sheet to run the checklist.</p>"}</div>
       </aside>
     </div>`;
+  const sheetForm = document.getElementById("sheetForm");
+  sheetForm.querySelectorAll(".chip").forEach((chip) => chip.addEventListener("click", () => toggleChip(chip)));
+  sheetForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    updateDrawing();
+  });
   if (!job.hasSheet) {
     document.getElementById("sheetScroll").innerHTML = `<div class="banner warn"><p>Generate the sheet from the setup page.</p></div>`;
     return;
@@ -507,6 +588,22 @@ function renderSheet() {
   img.addEventListener("load", fit);
   document.getElementById("zoomIn").addEventListener("click", () => { state.zoom = Math.min(2.6, state.zoom + 0.25); fit(); });
   document.getElementById("zoomOut").addEventListener("click", () => { state.zoom = Math.max(0.6, state.zoom - 0.25); fit(); });
+}
+
+async function updateDrawing() {
+  try {
+    const body = collectJob(document.getElementById("sheetForm"));
+    if ((body.selectedViews || []).length < 2) {
+      state.error = "At least 2 views are required.";
+      renderSheet();
+      return;
+    }
+    await persist(body, false);
+    await api(`/api/jobs/${state.job.id}/generate`, { method: "POST" });
+    await boot();
+  } catch (error) {
+    flash(error);
+  }
 }
 
 function renderLibrary() {

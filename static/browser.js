@@ -21,7 +21,7 @@
     Keywords: "keywords",
     Vendor: "vendor",
   };
-  const LAYER_PX = { BORDER: 1.8, OBJECT: 1.35, THIN: 0.9, DIM: 0.85, CENTER: 0.85, TEXT: 0.8, HATCH: 0.7, TABLE: 1.05 };
+  const LAYER_PX = { BORDER: 1.8, OBJECT: 1.35, THIN: 0.9, DIM: 0.85, CENTER: 0.85, HIDDEN: 0.85, TEXT: 0.8, HATCH: 0.7, TABLE: 1.05 };
   const BEND_COLUMNS = [
     { key: "id", heading: "BEND ID", width: 0.18 },
     { key: "direction", heading: "BEND DIRECTION", width: 0.32 },
@@ -44,6 +44,8 @@
     { role: "end", label: "END" },
     { role: "iso", label: "ISOMETRIC" },
     { role: "flat", label: "FLAT PATTERN" },
+    { role: "bottom", label: "BOTTOM" },
+    { role: "back", label: "BACK" },
   ];
   const SIGNOFF_VIEWS = [
     { role: "side", label: "SIDE ELEVATION" },
@@ -165,7 +167,14 @@
     const fresh = seedState();
     if (!saved || !Array.isArray(saved.jobs)) return fresh;
     const kept = new Map((saved.templates || []).map((item) => [item.id, item]));
-    fresh.templates = fresh.templates.map((item) => kept.get(item.id) || item);
+    fresh.templates = fresh.templates.map((item) => {
+      const saved = kept.get(item.id);
+      if (!saved) return item;
+      const views = (saved.views || []).slice();
+      const have = new Set(views.map((view) => view.role));
+      (item.views || []).forEach((view) => { if (!have.has(view.role)) views.push(view); });
+      return { ...saved, views };
+    });
     if (Array.isArray(saved.formats) && saved.formats.length) fresh.formats = saved.formats;
     fresh.jobs = saved.jobs;
     return fresh;
@@ -312,7 +321,7 @@
     ["length", "width", "height"].forEach((key) => {
       if (!(Number(size[key]) > 0)) size[key] = found[key];
     });
-    if (!props.thickness) props.thickness = String(Math.round(found.height * 10000) / 10000);
+    if (found.plate && !props.thickness) props.thickness = String(Math.round(found.height * 10000) / 10000);
     return size;
   }
 
@@ -748,7 +757,7 @@
   function rect(x, y, w, h, layer = "TABLE") { return { op: "rect", x1: x, y1: y, x2: w, y2: h, layer }; }
   function circle(cx, cy, r, layer = "OBJECT") { return { op: "circle", x1: cx, y1: cy, r, layer }; }
   function poly(pts, layer = "OBJECT", dashed = false) { return { op: "poly", pts, layer, dashed }; }
-  function solid(pts) { return { op: "solid", pts }; }
+  function solid(pts, fill = "") { return { op: "solid", pts, fill }; }
   function text(x, y, value, size = 0.1, anchor = "start", bold = false) {
     return { op: "text", x1: x, y1: y, text: String(value ?? ""), size, anchor, bold };
   }
@@ -954,17 +963,62 @@
     return textValue.includes(".") ? textValue : value.toFixed(3);
   }
 
-  function envelope(role, overall) {
+  const VIEW_STYLES = ["hidden-line-removed", "hidden-line", "shaded", "raster"];
+
+  function styleName(value) {
+    return VIEW_STYLES.includes(value) ? value : "hidden-line-removed";
+  }
+
+  function styleCaption(style, envelopeView) {
+    const note = { "hidden-line": "HIDDEN LINE", shaded: "SHADED", raster: "RASTER" }[style] || "";
+    if (envelopeView) return note ? `ENVELOPE · ${note}` : "ENVELOPE";
+    return note;
+  }
+
+  function faceColors(style) {
+    if (style === "shaded") return ["#d9d4cc", "#e6e1d8", "#c4bfb6"];
+    if (style === "raster") return ["#b7b2a8", "#d2cdc4", "#8f8a82"];
+    return [];
+  }
+
+  function displayOf(model) {
+    const display = (model && model.display) || {};
+    const size = Number(display.annotationSize);
+    return {
+      viewStyle: styleName(display.viewStyle),
+      annotationSize: size > 0 && size <= 1 ? size : 0.10,
+      annotationStyle: display.annotationStyle === "bold" ? "bold" : "standard",
+      balloons: display.balloons !== false,
+      partsList: display.partsList !== false,
+    };
+  }
+
+  function envelope(role, overall, viewStyle, annotationSize) {
     const length = num(overall.length);
     const width = num(overall.width);
     const height = num(overall.height);
     if (length <= 0 || width <= 0 || height <= 0) return { empty: true };
+    const style = styleName(viewStyle);
+    const colors = faceColors(style);
     if (role === "iso") {
-      const p = (x, y, z) => [(x - z) * Math.cos(Math.PI / 6), y + (x + z) * Math.sin(Math.PI / 6)];
+      const project = (x, y, z) => [(x - z) * Math.cos(Math.PI / 6), y + (x + z) * Math.sin(Math.PI / 6)];
       const corners = {};
-      [0, 1].forEach((i) => [0, 1].forEach((j) => [0, 1].forEach((k) => { corners[`${i}${j}${k}`] = p(i * length, j * height, k * width); })));
+      [0, 1].forEach((i) => [0, 1].forEach((j) => [0, 1].forEach((k) => { corners[`${i}${j}${k}`] = project(i * length, j * height, k * width); })));
       const edges = [[0, 0, 0, 1, 0, 0], [1, 0, 0, 1, 1, 0], [1, 1, 0, 0, 1, 0], [0, 1, 0, 0, 0, 0], [0, 0, 1, 1, 0, 1], [1, 0, 1, 1, 1, 1], [1, 1, 1, 0, 1, 1], [0, 1, 1, 0, 0, 1], [0, 0, 0, 0, 0, 1], [1, 0, 0, 1, 0, 1], [1, 1, 0, 1, 1, 1], [0, 1, 0, 0, 1, 1]];
-      return { paths: edges.map((e) => ({ pts: [corners[`${e[0]}${e[1]}${e[2]}`], corners[`${e[3]}${e[4]}${e[5]}`]], layer: "OBJECT" })), caption: "ENVELOPE" };
+      const paths = edges.map((e) => {
+        const hidden = style === "hidden-line" && e[2] === 1 && e[5] === 1;
+        return { pts: [corners[`${e[0]}${e[1]}${e[2]}`], corners[`${e[3]}${e[4]}${e[5]}`]], layer: hidden ? "HIDDEN" : "OBJECT", dashed: hidden };
+      });
+      const view = { paths, caption: styleCaption(style, true), annotationSize };
+      if (colors.length) {
+        const face = (keys) => keys.map((key) => corners[key]);
+        view.fills = [
+          { pts: face(["000", "100", "110", "010"]), fill: colors[0] },
+          { pts: face(["010", "110", "111", "011"]), fill: colors[1] },
+          { pts: face(["100", "101", "111", "110"]), fill: colors[2] },
+        ];
+      }
+      return view;
     }
     let w = length;
     let h = height;
@@ -972,14 +1026,61 @@
     else if (["top", "bottom", "flat"].includes(role)) { w = length; h = width; }
     const padX = Math.max(w * 0.12, 0.4);
     const padY = Math.max(h * 0.18, 0.45);
-    return {
+    const view = {
       paths: [{ pts: [[0, 0], [w, 0], [w, h], [0, h], [0, 0]], layer: "OBJECT" }],
       dims: [
         { kind: "horizontal", x1: 0, x2: w, y: -padY, ext: 0, text: fmt(w) },
         { kind: "vertical", y1: 0, y2: h, x: -padX, ext: 0, text: fmt(h) },
       ],
-      caption: "ENVELOPE",
+      caption: styleCaption(style, true),
+      annotationSize,
     };
+    if (colors.length) view.fills = [{ pts: [[0, 0], [w, 0], [w, h], [0, h]], fill: colors[0] }];
+    return view;
+  }
+
+  function applyStyle(view, display) {
+    if (!view || view.empty) return view || { empty: true };
+    const style = display.viewStyle;
+    const copied = { ...view, annotationSize: display.annotationSize, annotationStyle: display.annotationStyle };
+    const colors = faceColors(style);
+    if (colors.length && !(copied.fills || []).length) {
+      const fills = [];
+      (copied.paths || []).forEach((path) => {
+        const pts = path.pts || [];
+        if (pts.length >= 4 && pts[0][0] === pts[pts.length - 1][0] && pts[0][1] === pts[pts.length - 1][1] && (path.layer || "OBJECT") === "OBJECT") {
+          fills.push({ pts: pts.slice(0, -1), fill: colors[0] });
+        }
+      });
+      if (fills.length) copied.fills = fills;
+    }
+    if (style === "hidden-line") {
+      copied.paths = (copied.paths || []).map((path) => {
+        if (path.hidden || path.layer === "HIDDEN") return { ...path, dashed: true, layer: "HIDDEN" };
+        return path;
+      });
+    }
+    if (!copied.caption) {
+      const note = styleCaption(style, false);
+      if (note) copied.caption = note;
+    }
+    return copied;
+  }
+
+  function attachBalloons(view, rows) {
+    if (!rows.length || !view || view.empty || (view.balloons || []).length) return view;
+    const [minx, miny, maxx, maxy] = bbox(view);
+    const span = Math.max(maxy - miny, 1);
+    const width = Math.max(maxx - minx, 1);
+    const count = Math.min(rows.length, 16);
+    const balloons = rows.slice(0, count).map((row, index) => ({
+      item: row.item === undefined || row.item === "" ? index + 1 : row.item,
+      x: minx + width * 0.62,
+      y: miny + span * ((index + 1) / (count + 1)),
+      nx: maxx + width * 0.28,
+      ny: maxy - (index + 0.5) * (span / count),
+    }));
+    return { ...view, balloons };
   }
 
   function bbox(view) {
@@ -987,6 +1088,7 @@
     const ys = [];
     const add = (x, y) => { xs.push(x); ys.push(y); };
     (view.paths || []).forEach((path) => (path.pts || []).forEach(([x, y]) => add(num(x), num(y))));
+    (view.fills || []).forEach((fill) => (fill.pts || []).forEach(([x, y]) => add(num(x), num(y))));
     (view.circles || []).forEach((c) => {
       add(num(c.cx) - num(c.r), num(c.cy) - num(c.r));
       add(num(c.cx) + num(c.r), num(c.cy) + num(c.r));
@@ -1031,9 +1133,16 @@
     const ox = x + 0.06 + (iw - gw * scale) / 2 - minx * scale;
     const oy = innerBottom + (ih - gh * scale) / 2 - miny * scale;
     const p = (px, py) => [ox + px * scale, oy + py * scale];
+    const ann = num(view.annotationSize, 0.10) > 0 ? num(view.annotationSize, 0.10) : 0.10;
+    const bold = view.annotationStyle === "bold";
+    (view.fills || []).forEach((fill) => {
+      const pts = (fill.pts || []).map(([px, py]) => p(num(px), num(py)));
+      if (pts.length >= 3) prims.push(solid(pts, fill.fill || ""));
+    });
     (view.paths || []).forEach((path) => {
       const pts = (path.pts || []).map(([px, py]) => p(num(px), num(py)));
-      if (pts.length >= 2) prims.push(poly(pts, path.layer || "OBJECT", path.layer === "CENTER"));
+      const layer = path.layer || "OBJECT";
+      if (pts.length >= 2) prims.push(poly(pts, layer, !!path.dashed || layer === "CENTER" || layer === "HIDDEN"));
     });
     (view.circles || []).forEach((c) => {
       const [cx, cy] = p(num(c.cx), num(c.cy));
@@ -1046,12 +1155,12 @@
         const b = dim.kind === "horizontal" ? p(num(dim.x2), num(dim.y)) : p(num(dim.x), num(dim.y2));
         prims.push(line(a[0], a[1], b[0], b[1], "DIM"));
         prims.push(arrow(a[0], a[1], b[0], b[1]), arrow(b[0], b[1], a[0], a[1]));
-        prims.push(text((a[0] + b[0]) / 2, (a[1] + b[1]) / 2 + 0.04, dim.text || "", 0.085, "middle"));
+        prims.push(text((a[0] + b[0]) / 2, (a[1] + b[1]) / 2 + 0.04, dim.text || "", ann, "middle", bold));
       } else if (dim.kind === "leader") {
         const a = p(num(dim.x), num(dim.y));
         const b = p(num(dim.tx), num(dim.ty));
         prims.push(line(b[0], b[1], a[0], a[1], "DIM"), arrow(a[0], a[1], b[0], b[1]));
-        prims.push(text(b[0], b[1] + 0.03, dim.text || "", 0.085));
+        prims.push(text(b[0], b[1] + 0.03, dim.text || "", ann, "start", bold));
       }
     });
     (view.notes || []).forEach((note) => {
@@ -1131,8 +1240,9 @@
     let rows = [];
     if (kind === "bend") { spec = [item.table.title || "TABLE", item.table.columns || []]; rows = model.bends || []; }
     else if (kind === "parts" && fmt) { spec = [fmt.title || "Parts List", fmt.columns || []]; rows = job.bomRows || []; }
+    const display = displayOf(model);
     const partSheet = job.sourceKind === "ipt" || item.drawingType === "part";
-    if (partSheet && kind === "parts") spec = null;
+    if ((partSheet || !display.partsList) && kind === "parts") spec = null;
     if (partSheet && kind === "bend" && !rows.length) spec = null;
     let tableBox = null;
     if (spec && spec[1].length) {
@@ -1147,11 +1257,15 @@
     if (tableBox && item.drawingType !== "part") top = Math.min(top, tableBox[1] - 0.1);
     const boxes = allocate(roles, [inset + 0.12, bottom, width - 2 * inset - 0.24, Math.max(top - bottom, 1)], item.drawingType || "part");
     const prims = border(width, height);
+    const balloonRole = ["iso", "front", "side"].find((role) => roles.includes(role));
+    const useBalloons = job.sourceKind === "iam" && display.balloons && display.partsList && rows.length && balloonRole;
     roles.forEach((role) => {
       const box = boxes[role];
       if (!box) return;
       const authored = (model.views || {})[role];
-      const view = geometry(authored) ? authored : envelope(role, model.overall || {});
+      let view = geometry(authored) ? applyStyle(authored, display) : envelope(role, model.overall || {}, display.viewStyle, display.annotationSize);
+      if (view && !view.empty) view = { ...view, annotationStyle: display.annotationStyle, annotationSize: display.annotationSize };
+      if (useBalloons && role === balloonRole) view = attachBalloons(view, rows);
       prims.push(...renderView(view, role, labels[role] || "", box));
     });
     if (tableBox && spec) prims.push(...dataTable(...tableBox, spec[0], spec[1], rows));
@@ -1181,10 +1295,12 @@
         parts.push(`<circle cx="${prim.x1.toFixed(4)}" cy="${prim.y1.toFixed(4)}" r="${prim.r.toFixed(4)}" stroke-width="${sw}" vector-effect="non-scaling-stroke"/>`);
       } else if (prim.op === "poly") {
         const d = prim.pts.map(([px, py]) => `${px.toFixed(4)},${py.toFixed(4)}`).join(" ");
-        parts.push(`<polyline points="${d}" stroke-width="${sw}" vector-effect="non-scaling-stroke"/>`);
+        const dash = prim.dashed || prim.layer === "CENTER" || prim.layer === "HIDDEN" ? ' stroke-dasharray="5 3"' : "";
+        parts.push(`<polyline points="${d}" stroke-width="${sw}" vector-effect="non-scaling-stroke"${dash}/>`);
       } else if (prim.op === "solid") {
         const d = prim.pts.map((pt) => `${pt[0].toFixed(4)},${pt[1].toFixed(4)}`).join(" ");
-        parts.push(`<polygon points="${d}" fill="#1b1916" stroke="none"/>`);
+        const fill = /^#[0-9A-Fa-f]{6}$/.test(prim.fill || "") ? prim.fill : "#1b1916";
+        parts.push(`<polygon points="${d}" fill="${fill}" stroke="none"/>`);
       } else if (prim.op === "text" && prim.text) {
         const weight = prim.bold ? "700" : "500";
         const anchor = { start: "start", middle: "middle", end: "end" }[prim.anchor] || "start";

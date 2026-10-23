@@ -23,6 +23,7 @@ class Prim:
     weight: float = 0.01
     dashed: bool = False
     bold: bool = False
+    fill: str = ""
 
 
 LAYER_WEIGHT = {
@@ -31,6 +32,7 @@ LAYER_WEIGHT = {
     "THIN": 0.007,
     "DIM": 0.005,
     "CENTER": 0.005,
+    "HIDDEN": 0.005,
     "TEXT": 0.005,
     "HATCH": 0.004,
     "TABLE": 0.008,
@@ -42,6 +44,7 @@ LAYER_PX = {
     "THIN": 0.9,
     "DIM": 0.85,
     "CENTER": 0.85,
+    "HIDDEN": 0.85,
     "TEXT": 0.8,
     "HATCH": 0.7,
     "TABLE": 1.05,
@@ -68,8 +71,8 @@ def poly(pts, layer="OBJECT", dashed=False) -> Prim:
     return Prim("poly", layer, pts=list(pts), weight=LAYER_WEIGHT[layer], dashed=dashed)
 
 
-def solid(pts, layer="DIM") -> Prim:
-    return Prim("solid", layer, pts=list(pts))
+def solid(pts, layer="DIM", fill: str = "") -> Prim:
+    return Prim("solid", layer, pts=list(pts), fill=fill)
 
 
 def text(x, y, value, size=0.1, anchor="start", layer="TEXT", bold=False) -> Prim:

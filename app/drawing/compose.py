@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.drawing.frame import BLOCK_W, BORDER_INSET, border, data_table, signoff_block, title_block, title_block_height
 from app.drawing.prims import Prim, text
-from app.drawing.views import ROLE_LABELS, envelope_view, render_view, view_has_geometry
+from app.drawing.views import ROLE_LABELS, apply_view_style, attach_balloons, envelope_view, render_view, view_has_geometry, view_style_name
 
 
 def _box(x, y, w, h):
@@ -96,14 +96,30 @@ def _allocate_part(roles: list[str], area, table) -> dict:
     return boxes
 
 
-def _resolve(model: dict, role: str) -> dict:
+def _display(model: dict) -> tuple[str, float, str, bool, bool]:
+    display = model.get("display") if isinstance(model.get("display"), dict) else {}
+    style = view_style_name(display.get("viewStyle"))
+    try:
+        size = float(display.get("annotationSize") or 0.10)
+    except (TypeError, ValueError):
+        size = 0.10
+    if size <= 0 or size > 1:
+        size = 0.10
+    annotation = "bold" if display.get("annotationStyle") == "bold" else "standard"
+    balloons = display.get("balloons", True)
+    parts = display.get("partsList", True)
+    return style, size, annotation, bool(balloons), bool(parts)
+
+
+def _resolve(model: dict, role: str, style: str, size: float, annotation: str) -> dict:
     views = model.get("views") or {}
     authored = views.get(role)
     if view_has_geometry(authored):
-        return authored
+        return apply_view_style(authored, style, size, annotation)
     overall = model.get("overall") or {}
-    made = envelope_view(role, overall)
+    made = envelope_view(role, overall, style, size)
     if view_has_geometry(made):
+        made["annotationStyle"] = annotation
         return made
     return {"empty": True}
 
@@ -156,11 +172,12 @@ def compose(template: dict, bom_format: dict | None, job: dict) -> list[Prim]:
     rows = table_rows(template, model, job.get("bom_rows") or [])
     kind = (template.get("table") or {}).get("kind")
     source = job.get("source_kind") or ""
+    style, ann, annotation, want_balloons, want_parts = _display(model)
     # A part has no parts list. An empty bend table is not drawn.
-    if source == "ipt" or template.get("drawing_type") == "part":
+    if source == "ipt" or template.get("drawing_type") == "part" or not want_parts:
         if kind == "parts":
             spec = None
-        elif kind == "bend" and not rows:
+        elif kind == "bend" and not rows and (source == "ipt" or template.get("drawing_type") == "part"):
             spec = None
     table_box = None
     if spec and spec[1]:
@@ -185,11 +202,15 @@ def compose(template: dict, bom_format: dict | None, job: dict) -> list[Prim]:
 
     prims: list[Prim] = []
     prims.extend(border(width, height))
+    balloon_role = next((role for role in ("iso", "front", "side") if role in roles), None)
+    use_balloons = source == "iam" and want_balloons and want_parts and bool(rows) and bool(balloon_role)
     for role in roles:
         box = boxes.get(role)
         if not box:
             continue
-        view = _resolve(model, role)
+        view = _resolve(model, role, style, ann, annotation)
+        if use_balloons and role == balloon_role:
+            view = attach_balloons(view, rows)
         prims.extend(render_view(view, role, label_for.get(role, ""), box))
     if table_box and spec:
         prims.extend(data_table(*table_box, spec[0], spec[1], rows))

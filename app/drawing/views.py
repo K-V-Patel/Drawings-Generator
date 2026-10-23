@@ -29,35 +29,69 @@ def _as_float(value, default=0.0) -> float:
         return default
 
 
-def envelope_view(role: str, overall: dict) -> dict:
+VIEW_STYLES = ("hidden-line-removed", "hidden-line", "shaded", "raster")
+_STYLE_NOTE = {
+    "hidden-line": "HIDDEN LINE",
+    "shaded": "SHADED",
+    "raster": "RASTER",
+}
+
+
+def view_style_name(value) -> str:
+    style = str(value or "hidden-line-removed")
+    return style if style in VIEW_STYLES else "hidden-line-removed"
+
+
+def _style_caption(style: str, envelope: bool) -> str:
+    note = _STYLE_NOTE.get(style, "")
+    if envelope:
+        return f"ENVELOPE · {note}" if note else "ENVELOPE"
+    return note
+
+
+def _face_colors(style: str) -> list[str]:
+    if style == "shaded":
+        return ["#d9d4cc", "#e6e1d8", "#c4bfb6"]
+    if style == "raster":
+        return ["#b7b2a8", "#d2cdc4", "#8f8a82"]
+    return []
+
+
+def envelope_view(role: str, overall: dict, view_style: str = "hidden-line-removed", annotation_size: float = 0.10) -> dict:
     length = _as_float(overall.get("length"))
     width = _as_float(overall.get("width"))
     height = _as_float(overall.get("height"))
     if length <= 0 or width <= 0 or height <= 0:
         return {"empty": True}
+    style = view_style_name(view_style)
+    if role == "iso":
+        return _iso_box(length, width, height, style, annotation_size)
     if role in {"front", "back"}:
         w, h = length, height
     elif role in {"side", "end", "section"}:
         w, h = width, height
     elif role in {"top", "bottom", "flat"}:
         w, h = length, width
-    elif role == "iso":
-        return _iso_box(length, width, height)
     else:
         w, h = length, height
     pad_x = max(w * 0.12, 0.4)
     pad_y = max(h * 0.18, 0.45)
-    return {
+    view = {
         "paths": [{"pts": [[0, 0], [w, 0], [w, h], [0, h], [0, 0]], "layer": "OBJECT"}],
         "dims": [
             {"kind": "horizontal", "x1": 0, "x2": w, "y": -pad_y, "ext": 0, "text": _fmt(w)},
             {"kind": "vertical", "y1": 0, "y2": h, "x": -pad_x, "ext": 0, "text": _fmt(h)},
         ],
-        "caption": "ENVELOPE",
+        "caption": _style_caption(style, True),
+        "annotationSize": annotation_size,
     }
+    colors = _face_colors(style)
+    if colors:
+        view["fills"] = [{"pts": [[0, 0], [w, 0], [w, h], [0, h]], "fill": colors[0]}]
+    return view
 
 
-def _iso_box(length: float, width: float, height: float) -> dict:
+def _iso_box(length: float, width: float, height: float, style: str = "hidden-line-removed", annotation_size: float = 0.10) -> dict:
     def p(x, y, z):
         c = math.cos(math.radians(30))
         s = math.sin(math.radians(30))
@@ -83,8 +117,30 @@ def _iso_box(length: float, width: float, height: float) -> dict:
         ((1, 1, 0), (1, 1, 1)),
         ((0, 1, 0), (0, 1, 1)),
     ]
-    paths = [{"pts": [corners[a], corners[b]], "layer": "OBJECT"} for a, b in edges]
-    return {"paths": paths, "caption": "ENVELOPE"}
+    paths = []
+    for a, b in edges:
+        hidden = style == "hidden-line" and a[2] == 1 and b[2] == 1
+        paths.append({
+            "pts": [corners[a], corners[b]],
+            "layer": "HIDDEN" if hidden else "OBJECT",
+            "dashed": hidden,
+        })
+    view = {
+        "paths": paths,
+        "caption": _style_caption(style, True),
+        "annotationSize": annotation_size,
+    }
+    colors = _face_colors(style)
+    if colors:
+        def face(*keys):
+            return [corners[key] for key in keys]
+
+        view["fills"] = [
+            {"pts": face((0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)), "fill": colors[0]},
+            {"pts": face((0, 1, 0), (1, 1, 0), (1, 1, 1), (0, 1, 1)), "fill": colors[1]},
+            {"pts": face((1, 0, 0), (1, 0, 1), (1, 1, 1), (1, 1, 0)), "fill": colors[2]},
+        ]
+    return view
 
 
 def _fmt(value: float) -> str:
@@ -110,6 +166,9 @@ def _bbox_of(view: dict) -> tuple[float, float, float, float]:
 
     for path in view.get("paths") or []:
         for x, y in path.get("pts") or []:
+            add(x, y)
+    for fill in view.get("fills") or []:
+        for x, y in fill.get("pts") or []:
             add(x, y)
     for c in view.get("circles") or []:
         r = _as_float(c.get("r"))
@@ -187,11 +246,20 @@ def render_view(view: dict, role: str, label: str, box: tuple[float, float, floa
     def p(px, py):
         return ox + px * scale, oy + py * scale
 
+    ann = _as_float((view or {}).get("annotationSize"), 0.10)
+    if ann <= 0:
+        ann = 0.10
+    bold = str((view or {}).get("annotationStyle") or "") == "bold"
+    for fill in view.get("fills") or []:
+        pts = [p(px, py) for px, py in fill.get("pts") or []]
+        if len(pts) >= 3:
+            prims.append(solid(pts, fill=str(fill.get("fill") or "")))
     for path in view.get("paths") or []:
         pts = [p(px, py) for px, py in path.get("pts") or []]
         if len(pts) >= 2:
             layer = path.get("layer") or "OBJECT"
-            prims.append(poly(pts, layer=layer, dashed=layer == "CENTER"))
+            dashed = bool(path.get("dashed")) or layer in {"CENTER", "HIDDEN"}
+            prims.append(poly(pts, layer=layer, dashed=dashed))
     for c in view.get("circles") or []:
         cx, cy = p(_as_float(c.get("cx")), _as_float(c.get("cy")))
         prims.append(circle(cx, cy, _as_float(c.get("r")) * scale, layer=c.get("layer") or "OBJECT"))
@@ -206,7 +274,7 @@ def render_view(view: dict, role: str, label: str, box: tuple[float, float, floa
     for hatch in view.get("hatch") or []:
         prims.extend(_hatch(hatch, p, scale))
     for dim in view.get("dims") or []:
-        prims.extend(_dim(dim, p))
+        prims.extend(_dim(dim, p, ann, bold))
     for note in view.get("notes") or []:
         nx, ny = p(_as_float(note.get("x")), _as_float(note.get("y")))
         prims.append(text(nx, ny, note.get("text", ""), size=_as_float(note.get("size"), 0.09), anchor=note.get("anchor", "start"), bold=bool(note.get("bold"))))
@@ -264,7 +332,7 @@ def _arrow(x, y, toward_x, toward_y, length=0.09) -> Prim:
     return solid([(x, y), p1, p2])
 
 
-def _dim(dim: dict, p) -> list[Prim]:
+def _dim(dim: dict, p, size: float = 0.10, bold: bool = False) -> list[Prim]:
     kind = dim.get("kind")
     prims: list[Prim] = []
     if kind == "horizontal":
@@ -280,7 +348,7 @@ def _dim(dim: dict, p) -> list[Prim]:
         prims.append(_arrow(x2, y2, x1, y1))
         mx, my = (x1 + x2) / 2, (y1 + y2) / 2
         ox, oy = _away((x1, y1), e1, 0.05)
-        prims.append(text(mx + ox, my + oy, dim.get("text", ""), size=0.085, anchor="middle"))
+        prims.append(text(mx + ox, my + oy, dim.get("text", ""), size=size, anchor="middle", bold=bold))
     elif kind == "vertical":
         x1, y1 = p(_as_float(dim["x"]), _as_float(dim["y1"]))
         x2, y2 = p(_as_float(dim["x"]), _as_float(dim["y2"]))
@@ -295,13 +363,13 @@ def _dim(dim: dict, p) -> list[Prim]:
         mx, my = (x1 + x2) / 2, (y1 + y2) / 2
         ox, oy = _away((x1, y1), e1, 0.05)
         anchor = "end" if ox < 0 else "start"
-        prims.append(text(mx + ox, my + oy, dim.get("text", ""), size=0.085, anchor=anchor))
+        prims.append(text(mx + ox, my + oy, dim.get("text", ""), size=size, anchor=anchor, bold=bold))
     elif kind == "leader":
         x, y = p(_as_float(dim["x"]), _as_float(dim["y"]))
         tx, ty = p(_as_float(dim["tx"]), _as_float(dim["ty"]))
         prims.append(line(tx, ty, x, y, layer="DIM"))
         prims.append(_arrow(x, y, tx, ty))
-        prims.append(text(tx, ty + 0.03, dim.get("text", ""), size=0.085, anchor=dim.get("anchor", "start")))
+        prims.append(text(tx, ty + 0.03, dim.get("text", ""), size=size, anchor=dim.get("anchor", "start"), bold=bold))
     return prims
 
 
@@ -341,6 +409,64 @@ def _weld(weld: dict, p) -> list[Prim]:
     if tail:
         prims.append(text(x2 + 0.06, ty + 0.02, str(tail), size=0.075, anchor="start"))
     return prims
+
+
+def attach_balloons(view: dict, rows: list[dict]) -> dict:
+    """Item balloons beside a view. Assemblies only; the caller decides that."""
+    if not rows or not view or view.get("empty") or view.get("balloons"):
+        return view
+    minx, miny, maxx, maxy = _bbox_of(view)
+    span = max(maxy - miny, 1.0)
+    width = max(maxx - minx, 1.0)
+    count = min(len(rows), 16)
+    balloons = []
+    for index, row in enumerate(rows[:count]):
+        item = row.get("item")
+        if item in (None, ""):
+            item = index + 1
+        balloons.append({
+            "item": item,
+            "x": minx + width * 0.62,
+            "y": miny + span * ((index + 1) / (count + 1)),
+            "nx": maxx + width * 0.28,
+            "ny": maxy - (index + 0.5) * (span / count),
+        })
+    copied = dict(view)
+    copied["balloons"] = balloons
+    return copied
+
+
+def apply_view_style(view: dict, style: str, annotation_size: float, annotation_style: str) -> dict:
+    """Stamp annotation settings, and shade closed profiles when the style asks for it."""
+    if not view or view.get("empty"):
+        return view or {"empty": True}
+    style = view_style_name(style)
+    copied = dict(view)
+    copied["annotationSize"] = annotation_size
+    copied["annotationStyle"] = "bold" if annotation_style == "bold" else "standard"
+    colors = _face_colors(style)
+    if colors and not copied.get("fills"):
+        fills = []
+        for path in copied.get("paths") or []:
+            pts = path.get("pts") or []
+            if len(pts) >= 4 and pts[0] == pts[-1] and (path.get("layer") or "OBJECT") == "OBJECT":
+                fills.append({"pts": pts[:-1], "fill": colors[0]})
+        if fills:
+            copied["fills"] = fills
+    if style == "hidden-line":
+        paths = []
+        for path in copied.get("paths") or []:
+            item = dict(path)
+            if item.get("hidden") or item.get("layer") == "HIDDEN":
+                item["dashed"] = True
+                item["layer"] = "HIDDEN"
+            paths.append(item)
+        copied["paths"] = paths
+    if not copied.get("caption"):
+        note = _style_caption(style, False)
+        if note:
+            copied["caption"] = note
+    return copied
 
 
 def _balloon(balloon: dict, p) -> list[Prim]:

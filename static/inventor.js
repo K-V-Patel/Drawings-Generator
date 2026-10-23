@@ -519,14 +519,30 @@ thickness values are converted to inches and become the sheet envelope.
     return unit ? inchesFrom(`${number} ${unit}`) : inchesFrom(number);
   }
 
+  const SIZE_PAIR = new RegExp(
+    `\\((${SIZE_TOKEN})\\s*(in(?:ch(?:es)?)?|mm|cm|")?\\s*[x×]\\s*(${SIZE_TOKEN})\\s*(in(?:ch(?:es)?)?|mm|cm|")?\\)`,
+    "i",
+  );
+  const SIZE_LENGTH = new RegExp(`[-–—]\\s*(${SIZE_TOKEN})\\s*(in(?:ch(?:es)?)?|mm|cm|")?`, "i");
+
   function sizeFromText(text) {
-    const match = SIZE_TRIPLE.exec(String(text || ""));
-    if (!match) return null;
-    const length = tokenInches(match[1], match[2]);
-    const width = tokenInches(match[3], match[4]);
-    const height = tokenInches(match[5], match[6]);
-    if (!(length > 0 && width > 0 && height > 0)) return null;
-    return { length: round(length), width: round(width), height: round(height) };
+    const raw = String(text || "");
+    const match = SIZE_TRIPLE.exec(raw);
+    if (match) {
+      const length = tokenInches(match[1], match[2]);
+      const width = tokenInches(match[3], match[4]);
+      const height = tokenInches(match[5], match[6]);
+      if (length > 0 && width > 0 && height > 0) return { length: round(length), width: round(width), height: round(height), plate: true };
+    }
+    const pair = SIZE_PAIR.exec(raw);
+    if (!pair) return null;
+    const lengthMatch = SIZE_LENGTH.exec(raw.slice(pair.index + pair[0].length));
+    if (!lengthMatch) return null;
+    const depth = tokenInches(pair[1], pair[2]);
+    const flange = tokenInches(pair[3], pair[4]);
+    const length = tokenInches(lengthMatch[1], lengthMatch[2]);
+    if (!(depth > 0 && flange > 0 && length > 0)) return null;
+    return { length: round(length), width: round(flange), height: round(depth), plate: false };
   }
 
   const root = typeof globalThis !== "undefined" ? globalThis : window;
