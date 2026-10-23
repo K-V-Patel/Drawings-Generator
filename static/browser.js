@@ -639,7 +639,7 @@
     if (roles.length < 2) add("fail", "View count", "A production sheet needs at least 2 views.");
     else add("pass", "View count", `${roles.length} views. Minimum is 2.`);
     if (roles.length && roles.every((role) => !hasProfile(role))) {
-      add("warn", "Profiles", "These views are the overall envelope. The file has no view curves.");
+      add("warn", "Profiles", "These views are the overall envelope. The file has no view curves. Run CreateDrawing.vb in Inventor to place the real views on Standard.idw.");
     } else add("pass", "Profiles", "At least one view has model geometry.");
     if (blank(props.partNumber) || blank(props.description)) add("warn", "Drawing identity", "Part number and description both belong in the title block.");
     else add("pass", "Drawing identity", `${props.partNumber} — ${props.description}`);
@@ -1473,7 +1473,7 @@
     const area = [inset + 0.12, bottom, width - 2 * inset - 0.24, Math.max(top - bottom, 1)];
     const authored = roles.some((role) => geometry((model.views || {})[role]));
     const balloonRole = ["iso", "front", "side"].find((role) => roles.includes(role));
-    const useBalloons = job.sourceKind === "iam" && display.balloons && display.partsList && rows.length && balloonRole;
+    let useBalloons = job.sourceKind === "iam" && display.balloons && display.partsList && rows.length && balloonRole;
     const placement = !authored && item.drawingType !== "signoff" ? placeThirdAngle(roles, area, model.overall || {}, useBalloons ? 1.15 : 0) : null;
     const boxes = placement ? {} : allocate(roles, area, item.drawingType || "part");
     const prims = border(width, height);
@@ -1482,7 +1482,6 @@
       const authoredView = (model.views || {})[role];
       let view = geometry(authoredView) ? applyStyle(authoredView, display) : envelope(role, model.overall || {}, display.viewStyle, display.annotationSize);
       if (view && !view.empty) view = { ...view, annotationStyle: display.annotationStyle, annotationSize: display.annotationSize };
-      if (useBalloons && !placement && role === balloonRole) view = attachBalloons(view, rows);
       if (placement && placement.views[role]) {
         const keep = owned[role] || { h: false, v: false };
         view = {
@@ -1502,6 +1501,10 @@
       else if (placement && role === "flat" && placement.flat) box = placement.flat;
       if (!box) return;
       prims.push(...renderView(view, role, labels[role] || "", box));
+      if (useBalloons && role === balloonRole) {
+        prims.push(...balloonStack(rows, box, width - inset - 0.02));
+        useBalloons = false;
+      }
     });
     if (useBalloons && placement) {
       let target = placement.iso;

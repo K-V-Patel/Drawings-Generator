@@ -7,7 +7,6 @@ from app.drawing.prims import Prim, text
 from app.drawing.views import (
     ROLE_LABELS,
     apply_view_style,
-    attach_balloons,
     balloon_stack,
     envelope_view,
     owned_dims,
@@ -247,8 +246,6 @@ def compose(template: dict, bom_format: dict | None, job: dict) -> list[Prim]:
     owned = owned_dims(roles, length, width_in, height_in) if placement else {}
     for role in roles:
         view = _resolve(model, role, style, ann, annotation)
-        if use_balloons and not placement and role == balloon_role:
-            view = attach_balloons(view, rows)
         label = label_for.get(role, "")
         placed = placement["views"].get(role) if placement else None
         if placed:
@@ -274,6 +271,9 @@ def compose(template: dict, bom_format: dict | None, job: dict) -> list[Prim]:
         if not box:
             continue
         prims.extend(render_view(view, role, label, box))
+        if use_balloons and role == balloon_role:
+            prims.extend(balloon_stack(rows, box, width - inset - 0.02))
+            use_balloons = False
     if use_balloons and placement:
         target = placement.get("iso")
         placed = (placement.get("views") or {}).get(balloon_role or "")

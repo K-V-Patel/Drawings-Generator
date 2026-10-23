@@ -144,7 +144,7 @@ function renderNew() {
     ${templateSourceNote()}
     <div class="drop" id="drop">
       <strong>Drop an .ipt or an .iam</strong>
-      <span>JSON exports from the Inventor rule and zip bundles work too.</span>
+      <span>Run CreateDrawing.vb in Inventor for a Standard.idw sheet with real views. Drop the .drawgen.json it writes.</span>
       <label class="file-btn">Browse<input id="file" type="file" accept=".ipt,.iam,.json,.zip" hidden></label>
     </div>`;
   const drop = document.getElementById("drop");

@@ -6,8 +6,8 @@
 '
 ' Inventor's API reports length in centimeters and angles in radians.
 ' This rule converts both to the inch / degree values the sheet uses.
-' It does not export projected view curves. The app dimensions the
-' overall envelope until a later Inventor drawing add-in supplies profiles.
+' For the real views, run tools/CreateDrawing.vb instead. That rule
+' uses Standard.idw and lets Inventor place the views and dimensions.
 
 Imports System.Text
 
