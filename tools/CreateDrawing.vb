@@ -422,26 +422,44 @@ Function BalloonOne(sheet As Sheet, views As Dictionary(Of String, DrawingView),
 End Function
 
 Function CurvesForPart(view As DrawingView, occ As ComponentOccurrence) As List(Of DrawingCurve)
-    Dim found As New List(Of DrawingCurve)
+    Dim lines As New List(Of DrawingCurve)
+    Dim others As New List(Of DrawingCurve)
+    CollectPartCurves(view, occ, lines, others, True)
+    If lines.Count = 0 AndAlso others.Count = 0 Then CollectPartCurves(view, occ, lines, others, False)
+    For Each curve As DrawingCurve In others
+        lines.Add(curve)
+    Next
+    Return lines
+End Function
+
+Sub CollectPartCurves(view As DrawingView, occ As ComponentOccurrence, lines As List(Of DrawingCurve), others As List(Of DrawingCurve), directOnly As Boolean)
     Try
-        Dim direct As DrawingCurvesEnumerator = view.DrawingCurves(occ)
-        If direct IsNot Nothing Then
-            For Each curve As DrawingCurve In direct
-                found.Add(curve)
-            Next
+        Dim curves As DrawingCurvesEnumerator = Nothing
+        If directOnly Then
+            curves = view.DrawingCurves(occ)
+        Else
+            curves = view.DrawingCurves
         End If
-    Catch
-    End Try
-    If found.Count > 0 Then Return found
-    Try
-        Dim allCurves As DrawingCurvesEnumerator = view.DrawingCurves
-        If allCurves Is Nothing Then Return found
-        For Each curve As DrawingCurve In allCurves
-            If SameOccurrence(CurveOwner(curve), occ) Then found.Add(curve)
+        If curves Is Nothing Then Return
+        For Each curve As DrawingCurve In curves
+            If Not directOnly AndAlso Not SameOccurrence(CurveOwner(curve), occ) Then Continue For
+            If IsLine(curve) Then
+                lines.Add(curve)
+            Else
+                others.Add(curve)
+            End If
         Next
     Catch
     End Try
-    Return found
+End Sub
+
+Function IsLine(curve As DrawingCurve) As Boolean
+    Try
+        Dim kind As String = curve.CurveType.ToString()
+        If kind.Contains("Line") Then Return True
+    Catch
+    End Try
+    Return False
 End Function
 
 Function BalloonTip(sheet As Sheet, host As DrawingView, role As String, nextY As Dictionary(Of String, Double), tg As TransientGeometry) As Point2d
@@ -493,50 +511,48 @@ Function SameOccurrence(leftOcc As ComponentOccurrence, rightOcc As ComponentOcc
 End Function
 
 Function PlaceBalloon(sheet As Sheet, curve As DrawingCurve, tip As Point2d) As String
-    Dim lastProblem As String = "The part curve has no attach point."
-    Dim plain As GeometryIntent = Nothing
+    Dim attach As Point2d = PointOnCurve(curve)
+    If attach Is Nothing Then Return "The part curve has no attach point."
+    Dim intent As GeometryIntent = Nothing
     Try
-        plain = sheet.CreateGeometryIntent(curve)
-    Catch
-        plain = Nothing
-    End Try
-    If plain IsNot Nothing Then
-        lastProblem = AddBalloon(sheet, tip, plain)
-        If lastProblem = "" Then Return ""
-    End If
-    Dim attach As Point2d = CurvePoint(curve)
-    If attach Is Nothing Then Return lastProblem
-    Dim pointed As GeometryIntent = Nothing
-    Try
-        pointed = sheet.CreateGeometryIntent(curve, attach)
+        intent = sheet.CreateGeometryIntent(curve, attach)
     Catch ex As Exception
-        If lastProblem = "" Then lastProblem = ex.Message
-        Return lastProblem
+        Return ex.Message
     End Try
-    If pointed Is Nothing Then Return lastProblem
-    Return AddBalloon(sheet, tip, pointed)
+    If intent Is Nothing Then Return "The part curve has no attach point."
+    Dim plain As String = AddBalloon(sheet, tip, intent, False)
+    If plain = "" Then Return ""
+    Return AddBalloon(sheet, tip, intent, True)
 End Function
 
-Function AddBalloon(sheet As Sheet, tip As Point2d, intent As GeometryIntent) As String
-    ' The balloon position is first. The part edge is last.
+Function AddBalloon(sheet As Sheet, tip As Point2d, intent As GeometryIntent, withLevel As Boolean) As String
+    ' Balloon position first. The part edge, with a point on that edge, is last.
     Dim points As ObjectCollection = ThisApplication.TransientObjects.CreateObjectCollection()
     points.Add(tip)
     points.Add(intent)
     Try
-        sheet.Balloons.Add(points)
+        If withLevel Then
+            sheet.Balloons.Add(points, Nothing, PartsListLevelEnum.kStructured)
+        Else
+            sheet.Balloons.Add(points)
+        End If
         Return ""
     Catch ex As Exception
         Return ex.Message
     End Try
 End Function
 
-Function CurvePoint(curve As DrawingCurve) As Point2d
+Function PointOnCurve(curve As DrawingCurve) As Point2d
     Try
-        Return curve.MidPoint
+        Dim mid As Point2d = curve.MidPoint
+        If mid IsNot Nothing Then Return mid
     Catch
     End Try
     Try
-        Return curve.StartPoint
+        If curve.Segments IsNot Nothing AndAlso curve.Segments.Count > 0 Then
+            Dim startPt As Point2d = curve.Segments.Item(1).StartPoint
+            If startPt IsNot Nothing Then Return startPt
+        End If
     Catch
     End Try
     Return Nothing
@@ -667,14 +683,45 @@ Function FormatView(view As DrawingView, includeDims As Boolean, culture As Syst
     Dim maxX As Double = -1.0E+30
     Dim maxY As Double = -1.0E+30
     Dim count As Integer = 0
-    For Each curve As DrawingCurve In view.DrawingCurves
+    Dim viewCurves As DrawingCurvesEnumerator = Nothing
+    Try
+        viewCurves = view.DrawingCurves
+    Catch
+        viewCurves = Nothing
+    End Try
+    If viewCurves IsNot Nothing Then
+    For Each curve As DrawingCurve In viewCurves
+        Try
         Dim hidden As Boolean = False
         Try
-            If curve.Segments.Count > 0 Then hidden = curve.Segments.Item(1).HiddenLine
+            If curve.Segments IsNot Nothing AndAlso curve.Segments.Count > 0 Then hidden = curve.Segments.Item(1).HiddenLine
         Catch
         End Try
         Dim pts As List(Of Point2d) = CurvePoints(curve)
-        If pts.Count < 2 Then Continue For
+        If pts Is Nothing OrElse pts.Count < 2 Then Continue For
+        Dim coords As New StringBuilder()
+        Dim wrotePoint As Boolean = False
+        Dim pointCount As Integer = 0
+        Dim i As Integer = 0
+        Do While i < pts.Count
+            Dim local() As Double = ModelInches(view, pts(i))
+            i = i + 1
+            If local Is Nothing Then Continue Do
+            If wrotePoint Then coords.Append(",")
+            wrotePoint = True
+            coords.Append("[")
+            coords.Append(Num(local(0), culture))
+            coords.Append(",")
+            coords.Append(Num(local(1), culture))
+            coords.Append("]")
+            minX = Math.Min(minX, local(0))
+            minY = Math.Min(minY, local(1))
+            maxX = Math.Max(maxX, local(0))
+            maxY = Math.Max(maxY, local(1))
+            pointCount = pointCount + 1
+        Loop
+        If pointCount < 2 Then Continue For
+        count = count + pointCount
         If Not first Then paths.Append(",")
         first = False
         Dim layer As String = "OBJECT"
@@ -686,22 +733,7 @@ Function FormatView(view As DrawingView, includeDims As Boolean, culture As Syst
         paths.Append("{")
         paths.Append(Quoted("pts"))
         paths.Append(":[")
-        Dim i As Integer = 0
-        Do While i < pts.Count
-            Dim local() As Double = ModelInches(view, pts(i))
-            If i > 0 Then paths.Append(",")
-            paths.Append("[")
-            paths.Append(Num(local(0), culture))
-            paths.Append(",")
-            paths.Append(Num(local(1), culture))
-            paths.Append("]")
-            minX = Math.Min(minX, local(0))
-            minY = Math.Min(minY, local(1))
-            maxX = Math.Max(maxX, local(0))
-            maxY = Math.Max(maxY, local(1))
-            count = count + 1
-            i = i + 1
-        Loop
+        paths.Append(coords.ToString())
         paths.Append("],")
         paths.Append(Quoted("layer"))
         paths.Append(":")
@@ -711,7 +743,10 @@ Function FormatView(view As DrawingView, includeDims As Boolean, culture As Syst
         paths.Append(":")
         paths.Append(dashed)
         paths.Append("}")
+        Catch
+        End Try
     Next
+    End If
     Dim dims As String = ""
     If includeDims AndAlso count > 0 AndAlso maxX > minX AndAlso maxY > minY Then
         Dim across As String = AxisDim("horizontal", "x1", minX, "x2", maxX, "y", minY, maxX - minX, culture)
@@ -766,10 +801,23 @@ Function CurvePoints(curve As DrawingCurve) As List(Of Point2d)
     End Try
     Try
         If kind.Contains("Circle") AndAlso Not kind.Contains("Arc") Then
-            Dim center As Point2d = curve.CenterPoint
-            Dim radius As Double = center.DistanceTo(curve.StartPoint)
-            AddArcSamples(pts, center, radius, 0, 2 * HalfTurn(), 16)
-            Return pts
+            Dim center As Point2d = Nothing
+            Dim startPt As Point2d = Nothing
+            Try
+                center = curve.CenterPoint
+            Catch
+                center = Nothing
+            End Try
+            Try
+                startPt = curve.StartPoint
+            Catch
+                startPt = Nothing
+            End Try
+            If center IsNot Nothing AndAlso startPt IsNot Nothing Then
+                Dim radius As Double = center.DistanceTo(startPt)
+                AddArcSamples(pts, center, radius, 0, 2 * HalfTurn(), 16)
+                Return pts
+            End If
         End If
         If kind.Contains("Arc") OrElse kind.Contains("Ellipse") OrElse kind.Contains("Spline") OrElse kind.Contains("BSpline") Then
             Dim center As Point2d = Nothing
@@ -778,7 +826,7 @@ Function CurvePoints(curve As DrawingCurve) As List(Of Point2d)
             Catch
                 center = Nothing
             End Try
-            If center IsNot Nothing Then
+            If center IsNot Nothing AndAlso curve.StartPoint IsNot Nothing AndAlso curve.EndPoint IsNot Nothing AndAlso curve.MidPoint IsNot Nothing Then
                 Dim startA As Double = Math.Atan2(curve.StartPoint.Y - center.Y, curve.StartPoint.X - center.X)
                 Dim endA As Double = Math.Atan2(curve.EndPoint.Y - center.Y, curve.EndPoint.X - center.X)
                 Dim midA As Double = Math.Atan2(curve.MidPoint.Y - center.Y, curve.MidPoint.X - center.X)
@@ -790,11 +838,20 @@ Function CurvePoints(curve As DrawingCurve) As List(Of Point2d)
         End If
     Catch
     End Try
+    Dim startPt As Point2d = Nothing
+    Dim endPt As Point2d = Nothing
     Try
-        pts.Add(curve.StartPoint)
-        pts.Add(curve.EndPoint)
+        startPt = curve.StartPoint
     Catch
+        startPt = Nothing
     End Try
+    Try
+        endPt = curve.EndPoint
+    Catch
+        endPt = Nothing
+    End Try
+    If startPt IsNot Nothing Then pts.Add(startPt)
+    If endPt IsNot Nothing Then pts.Add(endPt)
     Return pts
 End Function
 
@@ -862,21 +919,28 @@ Function CosineOf(angle As Double) As Double
 End Function
 
 Function ModelInches(view As DrawingView, point As Point2d) As Double()
-    Dim x As Double = (point.X - view.Position.X) / view.Scale / 2.54
-    Dim y As Double = (point.Y - view.Position.Y) / view.Scale / 2.54
+    If point Is Nothing OrElse view Is Nothing OrElse view.Position Is Nothing Then Return Nothing
+    Dim scale As Double = view.Scale
+    If scale = 0 Then Return Nothing
+    Dim x As Double = (point.X - view.Position.X) / scale / 2.54
+    Dim y As Double = (point.Y - view.Position.Y) / scale / 2.54
     Return New Double() {x, y}
 End Function
 
 Function BomJson(model As Document) As String
+    Dim bom As New StringBuilder()
+    Try
     Dim asm As AssemblyDocument = model
     Dim view As BOMView = asm.ComponentDefinition.BOM.BOMViews.Item("Structured")
-    Dim bom As New StringBuilder()
     Dim index As Integer = 0
     For Each row As BOMRow In view.BOMRows
+        Try
         If row.ComponentDefinitions.Count = 0 Then Continue For
-        Dim child As Document = row.ComponentDefinitions.Item(1).Document
+        Dim def As ComponentDefinition = row.ComponentDefinitions.Item(1)
+        If def Is Nothing OrElse def.Document Is Nothing Then Continue For
+        Dim child As Document = def.Document
         If index > 0 Then bom.Append(",")
-        index += 1
+        index = index + 1
         Dim itemNo As String = CStr(row.ItemNumber)
         If itemNo = "" Then itemNo = index.ToString()
         bom.Append("{")
@@ -896,7 +960,11 @@ Function BomJson(model As Document) As String
         bom.Append(":")
         bom.Append(Quoted(CStr(row.ItemQuantity)))
         bom.Append("}")
+        Catch
+        End Try
     Next
+    Catch
+    End Try
     Return bom.ToString()
 End Function
 
