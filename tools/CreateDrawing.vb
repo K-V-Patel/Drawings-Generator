@@ -3,8 +3,8 @@
 '
 ' Creates a drawing from TemplateName, so the border, title block, and
 ' dimension style are the Inventor template. Inventor places the front,
-' top, and right views, plus an isometric from the model Home view, and
-' adds overall dimensions.
+' top, and right views from the model ViewCube, plus an isometric from
+' the model Home view, and adds overall dimensions.
 ' An assembly also gets a parts list. When it has more than one part,
 ' each part gets an item balloon.
 '
@@ -61,14 +61,21 @@ Sub Main()
         Dim front As DrawingView = sheet.DrawingViews.AddBaseView( _
             model, tg.CreatePoint2d(sheet.Width * 0.38, sheet.Height * 0.42), _
             0.1, ViewOrientationTypeEnum.kFrontViewOrientation, style)
+        ApplyFacing(front, model, "AppFrontViewCmd")
         drawDoc.Update()
         front.Scale = FitScale(sheet, model, front)
         drawDoc.Update()
 
         Dim views As New Dictionary(Of String, DrawingView)
         views("front") = front
-        views("top") = sheet.DrawingViews.AddProjectedView(front, tg.CreatePoint2d(front.Position.X, front.Position.Y + front.Height), style)
-        views("side") = sheet.DrawingViews.AddProjectedView(front, tg.CreatePoint2d(front.Position.X + front.Width, front.Position.Y), style)
+        views("top") = sheet.DrawingViews.AddBaseView( _
+            model, tg.CreatePoint2d(front.Position.X, front.Position.Y + front.Height), _
+            front.Scale, ViewOrientationTypeEnum.kTopViewOrientation, style)
+        ApplyFacing(views("top"), model, "AppTopViewCmd")
+        views("side") = sheet.DrawingViews.AddBaseView( _
+            model, tg.CreatePoint2d(front.Position.X + front.Width, front.Position.Y), _
+            front.Scale, ViewOrientationTypeEnum.kRightViewOrientation, style)
+        ApplyFacing(views("side"), model, "AppRightViewCmd")
         views("iso") = sheet.DrawingViews.AddBaseView( _
             model, tg.CreatePoint2d(sheet.Width * 0.75, sheet.Height * 0.68), _
             Math.Max(front.Scale * 0.75, 0.01), ViewOrientationTypeEnum.kIsoTopRightViewOrientation, style)
@@ -220,7 +227,11 @@ Sub NameView(view As DrawingView, title As String)
 End Sub
 
 Sub ApplyHomeCamera(drawView As DrawingView, model As Document)
-    ' Iso Top Right stays in place when the model window has no Home camera.
+    ApplyFacing(drawView, model, "")
+End Sub
+
+Sub ApplyFacing(drawView As DrawingView, model As Document, commandName As String)
+    ' Origin Front, Top, and Right stay in place when the ViewCube face cannot be read.
     Try
     If drawView Is Nothing OrElse model Is Nothing Then Return
     If model.Views.Count = 0 Then Return
@@ -236,37 +247,57 @@ Sub ApplyHomeCamera(drawView As DrawingView, model As Document)
     Dim upY As Double = live.UpVector.Y
     Dim upZ As Double = live.UpVector.Z
     Dim wasPerspective As Boolean = live.Perspective
+    Dim returnView As Inventor.View = Nothing
     Try
-        modelView.GoHome()
-        Dim homeCam As Camera = modelView.Camera
-        Dim homeEyeX As Double = homeCam.Eye.X
-        Dim homeEyeY As Double = homeCam.Eye.Y
-        Dim homeEyeZ As Double = homeCam.Eye.Z
-        Dim homeTargetX As Double = homeCam.Target.X
-        Dim homeTargetY As Double = homeCam.Target.Y
-        Dim homeTargetZ As Double = homeCam.Target.Z
-        Dim homeUpX As Double = homeCam.UpVector.X
-        Dim homeUpY As Double = homeCam.UpVector.Y
-        Dim homeUpZ As Double = homeCam.UpVector.Z
+        returnView = ThisApplication.ActiveView
+    Catch
+    End Try
+    Dim app As Inventor.Application = ThisApplication
+    Dim wasUpdating As Boolean = app.ScreenUpdating
+    Try
+        If commandName = "" Then
+            modelView.GoHome()
+        Else
+            app.ScreenUpdating = True
+            modelView.Activate()
+            app.CommandManager.ControlDefinitions.Item(commandName).Execute()
+            modelView.Update()
+            app.ScreenUpdating = wasUpdating
+        End If
+        Dim faceCam As Camera = modelView.Camera
+        Dim faceEyeX As Double = faceCam.Eye.X
+        Dim faceEyeY As Double = faceCam.Eye.Y
+        Dim faceEyeZ As Double = faceCam.Eye.Z
+        Dim faceTargetX As Double = faceCam.Target.X
+        Dim faceTargetY As Double = faceCam.Target.Y
+        Dim faceTargetZ As Double = faceCam.Target.Z
+        Dim faceUpX As Double = faceCam.UpVector.X
+        Dim faceUpY As Double = faceCam.UpVector.Y
+        Dim faceUpZ As Double = faceCam.UpVector.Z
         Dim keepScale As Double = drawView.Scale
-        Dim tg As TransientGeometry = ThisApplication.TransientGeometry
+        Dim tg As TransientGeometry = app.TransientGeometry
         Dim drawCam As Camera = drawView.Camera
-        drawCam.Eye = tg.CreatePoint(homeEyeX, homeEyeY, homeEyeZ)
-        drawCam.Target = tg.CreatePoint(homeTargetX, homeTargetY, homeTargetZ)
-        drawCam.UpVector = tg.CreateUnitVector(homeUpX, homeUpY, homeUpZ)
+        drawCam.Eye = tg.CreatePoint(faceEyeX, faceEyeY, faceEyeZ)
+        drawCam.Target = tg.CreatePoint(faceTargetX, faceTargetY, faceTargetZ)
+        drawCam.UpVector = tg.CreateUnitVector(faceUpX, faceUpY, faceUpZ)
         drawCam.Perspective = False
         drawCam.Apply()
         drawView.Scale = keepScale
     Catch
+        app.ScreenUpdating = wasUpdating
     End Try
     Try
-        Dim restore As TransientGeometry = ThisApplication.TransientGeometry
+        Dim restore As TransientGeometry = app.TransientGeometry
         live = modelView.Camera
         live.Eye = restore.CreatePoint(eyeX, eyeY, eyeZ)
         live.Target = restore.CreatePoint(targetX, targetY, targetZ)
         live.UpVector = restore.CreateUnitVector(upX, upY, upZ)
         live.Perspective = wasPerspective
         live.ApplyWithoutTransition()
+    Catch
+    End Try
+    Try
+        If returnView IsNot Nothing Then returnView.Activate()
     Catch
     End Try
     Catch
