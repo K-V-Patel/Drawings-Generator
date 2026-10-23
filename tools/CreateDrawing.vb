@@ -4,11 +4,12 @@
 ' Creates a drawing from TemplateName, so the border, title block, and
 ' dimension style are the Inventor template. The front view follows the
 ' model ViewCube. Top and side are projected from that front view so they
-' stay aligned. The isometric view uses the model Home view. Overall
-' dimensions are added on the orthographic views.
+' stay aligned. The isometric view uses the model Home view. Views are
+' drawn at 1/50 when that scale fits the sheet. Overall dimensions are
+' added on the orthographic views.
 ' An assembly also gets a parts list. When it has more than one part,
-' each part gets a balloon close beside that part on the isometric view.
-' Item numbers are not stacked in order.
+' each part gets one balloon just outside that part on the isometric
+' view. Item numbers are not stacked in order.
 '
 ' The drawing is saved as the part number .idw in the sibling Drawing
 ' folder when that folder exists, otherwise beside the model. An existing
@@ -66,6 +67,9 @@ Sub Main()
         ApplyFacing(front, model, "AppFrontViewCmd")
         QuietUpdate(drawDoc)
         front.Scale = FitScale(sheet, model, front)
+        ' 1/50 keeps a large assembly big enough that each balloon can sit on its own part.
+        ' The conservative fit was leaving the gantry at 1/100.
+        If front.Scale < 0.02 Then front.Scale = 0.02
         QuietUpdate(drawDoc)
 
         Dim views As New Dictionary(Of String, DrawingView)
@@ -74,7 +78,7 @@ Sub Main()
         views("side") = sheet.DrawingViews.AddProjectedView(front, tg.CreatePoint2d(front.Position.X + front.Width, front.Position.Y), style)
         views("iso") = sheet.DrawingViews.AddBaseView( _
             model, tg.CreatePoint2d(sheet.Width * 0.75, sheet.Height * 0.68), _
-            Math.Max(front.Scale * 0.75, 0.01), ViewOrientationTypeEnum.kIsoTopRightViewOrientation, style)
+            front.Scale, ViewOrientationTypeEnum.kIsoTopRightViewOrientation, style)
         ApplyHomeCamera(views("iso"), model)
         QuietUpdate(drawDoc)
         PositionViews(sheet, views, tg)
@@ -93,7 +97,7 @@ Sub Main()
         Dim balloonNote As String = ""
         If model.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then
             ShowAssemblyParts(sheet, views)
-            TryAddPartsList(sheet, views("front"), tg)
+            TryAddPartsList(drawDoc, sheet, views("front"), tg)
             QuietUpdate(drawDoc)
             balloonNote = AddItemBalloons(sheet, model, views, tg)
         End If
@@ -182,8 +186,16 @@ Sub PositionViews(sheet As Sheet, views As Dictionary(Of String, DrawingView), t
     TryMove(front, tg.CreatePoint2d(cx, cy))
     TryMove(top, tg.CreatePoint2d(cx, cy + front.Height / 2 + gap + top.Height / 2))
     TryMove(side, tg.CreatePoint2d(cx + front.Width / 2 + gap + side.Width / 2, cy))
-    iso.Scale = Math.Max(front.Scale * 0.8, 0.01)
-    TryMove(iso, tg.CreatePoint2d(sheet.Width - 3.5 - iso.Width / 2, sheet.Height * 0.62))
+    iso.Scale = front.Scale
+    Dim isoX As Double = sheet.Width - 3.2 - iso.Width / 2
+    Dim isoY As Double = sheet.Height * 0.58
+    If side.Position IsNot Nothing Then
+        Dim sideRight As Double = side.Position.X + side.Width / 2
+        If isoX - iso.Width / 2 < sideRight + 1.2 Then isoX = sideRight + 1.2 + iso.Width / 2
+    End If
+    If isoY + iso.Height / 2 > sheet.Height - 1.8 Then isoY = sheet.Height - 1.8 - iso.Height / 2
+    If isoY - iso.Height / 2 < 2.0 Then isoY = 2.0 + iso.Height / 2
+    TryMove(iso, tg.CreatePoint2d(isoX, isoY))
 End Sub
 
 Sub TryMove(view As DrawingView, point As Point2d)
@@ -199,7 +211,7 @@ Sub ShrinkToSheet(drawDoc As DrawingDocument, sheet As Sheet, views As Dictionar
     Dim marginB As Double = 1.6
     Dim marginT As Double = sheet.Height - 1.6
     For pass As Integer = 1 To 3
-        drawDoc.Update()
+        QuietUpdate(drawDoc)
         Dim minX As Double = marginR
         Dim minY As Double = marginT
         Dim maxX As Double = marginL
@@ -217,7 +229,7 @@ Sub ShrinkToSheet(drawDoc As DrawingDocument, sheet As Sheet, views As Dictionar
         views("front").Scale = NiceScale(views("front").Scale / factor)
         PositionViews(sheet, views, tg)
     Next
-    drawDoc.Update()
+    QuietUpdate(drawDoc)
 End Sub
 
 Sub NameView(view As DrawingView, title As String)
@@ -353,9 +365,10 @@ Sub QuietUpdate(drawDoc As DrawingDocument)
     End Try
 End Sub
 
-Sub TryAddPartsList(sheet As Sheet, front As DrawingView, tg As TransientGeometry)
+Sub TryAddPartsList(drawDoc As DrawingDocument, sheet As Sheet, front As DrawingView, tg As TransientGeometry)
     Try
-        Dim table As PartsList = sheet.PartsLists.Add(front, tg.CreatePoint2d(4.0, sheet.Height - 2.0))
+        Dim table As PartsList = sheet.PartsLists.Add(front, tg.CreatePoint2d(2.2, sheet.Height - 1.6))
+        QuietUpdate(drawDoc)
         KeepPartsListOnSheet(sheet, table, tg)
     Catch
     End Try
@@ -365,11 +378,19 @@ Sub KeepPartsListOnSheet(sheet As Sheet, table As PartsList, tg As TransientGeom
     Try
         Dim box As Box2d = table.RangeBox
         If box Is Nothing OrElse box.MinPoint Is Nothing OrElse box.MaxPoint Is Nothing Then Return
+        Dim leftLimit As Double = 1.6
+        Dim rightLimit As Double = sheet.Width - 1.6
         Dim shiftX As Double = 0
         Dim shiftY As Double = 0
-        If box.MinPoint.X < 1.4 Then shiftX = 1.4 - box.MinPoint.X
-        If box.MaxPoint.X + shiftX > sheet.Width - 1.4 Then shiftX = sheet.Width - 1.4 - box.MaxPoint.X
-        If box.MaxPoint.Y > sheet.Height - 1.2 Then shiftY = sheet.Height - 1.2 - box.MaxPoint.Y
+        ' Keep the item column on the sheet. A right-edge correction must not push it back off.
+        If box.MinPoint.X < leftLimit Then shiftX = leftLimit - box.MinPoint.X
+        Dim rightEdge As Double = box.MaxPoint.X + shiftX
+        If rightEdge > rightLimit Then
+            Dim pull As Double = rightLimit - rightEdge
+            If box.MinPoint.X + shiftX + pull < leftLimit Then pull = leftLimit - (box.MinPoint.X + shiftX)
+            shiftX = shiftX + pull
+        End If
+        If box.MaxPoint.Y > sheet.Height - 1.0 Then shiftY = sheet.Height - 1.0 - box.MaxPoint.Y
         If box.MinPoint.Y + shiftY < 1.2 Then shiftY = 1.2 - box.MinPoint.Y
         If shiftX = 0 AndAlso shiftY = 0 Then Return
         Dim origin As Point2d = table.Position
@@ -453,17 +474,21 @@ Function PlaceNearBalloons(sheet As Sheet, host As DrawingView, targets As List(
     Dim tipY As New List(Of Double)
     Dim problem As String = ""
     For Each occ As ComponentOccurrence In targets
-        Dim edge As Point2d = OuterEdge(host, occ)
-        If edge Is Nothing Then
+        Dim minX As Double = 0
+        Dim minY As Double = 0
+        Dim maxX As Double = 0
+        Dim maxY As Double = 0
+        If Not PartExtent(host, occ, minX, minY, maxX, maxY) Then
             missed.Add(occ)
         Else
-            Dim spot As Point2d = TipBeside(sheet, host, edge)
+            Dim spot As Point2d = TipOutside(sheet, host, minX, minY, maxX, maxY)
             occs.Add(occ)
             tipX.Add(spot.X)
             tipY.Add(spot.Y)
         End If
     Next
-    NudgeApart(host, tipX, tipY, 1.35)
+    NudgeApart(host, tipX, tipY, 1.3)
+    ClampTips(sheet, tipX, tipY)
     Dim index As Integer = 0
     Do While index < occs.Count
         Dim note As String = PlaceOneNear(sheet, host, occs(index), tg, tipX(index), tipY(index))
@@ -507,6 +532,92 @@ Function PlaceOneNear(sheet As Sheet, host As DrawingView, occ As ComponentOccur
         lastProblem = failure
     Loop
     Return lastProblem
+End Function
+
+Function PartExtent(host As DrawingView, occ As ComponentOccurrence, ByRef minX As Double, ByRef minY As Double, ByRef maxX As Double, ByRef maxY As Double) As Boolean
+    minX = 0
+    minY = 0
+    maxX = 0
+    maxY = 0
+    Dim seen As Integer = 0
+    Dim curves As List(Of DrawingCurve) = CurvesForPart(host, occ)
+    Dim index As Integer = 0
+    Dim limit As Integer = curves.Count
+    If limit > 160 Then limit = 160
+    Do While index < limit
+        IncludeCurveExtent(curves(index), minX, minY, maxX, maxY, seen)
+        index = index + 1
+    Loop
+    If seen = 0 Then Return False
+    Return True
+End Function
+
+Sub IncludeCurveExtent(curve As DrawingCurve, ByRef minX As Double, ByRef minY As Double, ByRef maxX As Double, ByRef maxY As Double, ByRef seen As Integer)
+    Try
+        IncludePoint(curve.MidPoint, minX, minY, maxX, maxY, seen)
+    Catch
+    End Try
+    Try
+        IncludePoint(curve.StartPoint, minX, minY, maxX, maxY, seen)
+    Catch
+    End Try
+    Try
+        IncludePoint(curve.EndPoint, minX, minY, maxX, maxY, seen)
+    Catch
+    End Try
+End Sub
+
+Sub IncludePoint(pt As Point2d, ByRef minX As Double, ByRef minY As Double, ByRef maxX As Double, ByRef maxY As Double, ByRef seen As Integer)
+    If pt Is Nothing Then Return
+    If seen = 0 Then
+        minX = pt.X
+        minY = pt.Y
+        maxX = pt.X
+        maxY = pt.Y
+    Else
+        If pt.X < minX Then minX = pt.X
+        If pt.Y < minY Then minY = pt.Y
+        If pt.X > maxX Then maxX = pt.X
+        If pt.Y > maxY Then maxY = pt.Y
+    End If
+    seen = seen + 1
+End Sub
+
+Function TipOutside(sheet As Sheet, host As DrawingView, minX As Double, minY As Double, maxX As Double, maxY As Double) As Point2d
+    Dim px As Double = (minX + maxX) / 2
+    Dim py As Double = (minY + maxY) / 2
+    Dim vx As Double = px
+    Dim vy As Double = py
+    If host IsNot Nothing AndAlso host.Position IsNot Nothing Then
+        vx = host.Position.X
+        vy = host.Position.Y
+    End If
+    Dim dx As Double = px - vx
+    Dim dy As Double = py - vy
+    Dim reach As Double = 0.85
+    Dim tipX As Double = px
+    Dim tipY As Double = py
+    If Math.Abs(dx) >= Math.Abs(dy) Then
+        If dx >= 0 Then
+            tipX = maxX + reach
+        Else
+            tipX = minX - reach
+        End If
+        tipY = py
+    Else
+        If dy >= 0 Then
+            tipY = maxY + reach
+        Else
+            tipY = minY - reach
+        End If
+        tipX = px
+    End If
+    Dim margin As Double = 1.15
+    If tipX < margin Then tipX = margin
+    If tipY < margin Then tipY = margin
+    If tipX > sheet.Width - margin Then tipX = sheet.Width - margin
+    If tipY > sheet.Height - margin Then tipY = sheet.Height - margin
+    Return ThisApplication.TransientGeometry.CreatePoint2d(tipX, tipY)
 End Function
 
 Function OuterEdge(host As DrawingView, occ As ComponentOccurrence) As Point2d
@@ -564,8 +675,9 @@ End Function
 
 Sub NudgeApart(host As DrawingView, xs As List(Of Double), ys As List(Of Double), gap As Double)
     If host Is Nothing OrElse host.Position Is Nothing Then Return
+    If xs Is Nothing OrElse ys Is Nothing Then Return
     Dim guard As Integer = 0
-    Do While guard < 6
+    Do While guard < 8
         guard = guard + 1
         Dim moved As Boolean = False
         Dim i As Integer = 0
@@ -574,16 +686,29 @@ Sub NudgeApart(host As DrawingView, xs As List(Of Double), ys As List(Of Double)
             Do While j < xs.Count
                 Dim dx As Double = xs(j) - xs(i)
                 Dim dy As Double = ys(j) - ys(i)
-                If dx * dx + dy * dy < gap * gap Then
-                    Dim ox As Double = xs(j) - host.Position.X
-                    Dim oy As Double = ys(j) - host.Position.Y
-                    Dim ax As Double = Math.Abs(ox)
-                    Dim ay As Double = Math.Abs(oy)
-                    Dim scale As Double = ax
-                    If ay > scale Then scale = ay
-                    If scale < 0.05 Then scale = 0.05
-                    xs(j) = xs(j) + ox / scale * 0.45
-                    ys(j) = ys(j) + oy / scale * 0.45
+                Dim ax As Double = Math.Abs(dx)
+                Dim ay As Double = Math.Abs(dy)
+                Dim near As Double = ax
+                If ay > near Then near = ay
+                If near < gap Then
+                    ' Slide along the outline. Pushing further from the view center is what sent balloons into empty space.
+                    Dim mx As Double = (xs(i) + xs(j)) / 2 - host.Position.X
+                    Dim my As Double = (ys(i) + ys(j)) / 2 - host.Position.Y
+                    Dim tax As Double = -my
+                    Dim tay As Double = mx
+                    Dim tscale As Double = Math.Abs(tax)
+                    If Math.Abs(tay) > tscale Then tscale = Math.Abs(tay)
+                    If tscale < 0.05 Then
+                        tax = 0
+                        tay = 1
+                        tscale = 1
+                    End If
+                    Dim push As Double = (gap - near) / 2 + 0.08
+                    If push < 0.2 Then push = 0.2
+                    xs(i) = xs(i) - tax / tscale * push
+                    ys(i) = ys(i) - tay / tscale * push
+                    xs(j) = xs(j) + tax / tscale * push
+                    ys(j) = ys(j) + tay / tscale * push
                     moved = True
                 End If
                 j = j + 1
@@ -591,6 +716,19 @@ Sub NudgeApart(host As DrawingView, xs As List(Of Double), ys As List(Of Double)
             i = i + 1
         Loop
         If Not moved Then Exit Do
+    Loop
+End Sub
+
+Sub ClampTips(sheet As Sheet, xs As List(Of Double), ys As List(Of Double))
+    If xs Is Nothing OrElse ys Is Nothing Then Return
+    Dim margin As Double = 1.15
+    Dim index As Integer = 0
+    Do While index < xs.Count AndAlso index < ys.Count
+        If xs(index) < margin Then xs(index) = margin
+        If ys(index) < margin Then ys(index) = margin
+        If xs(index) > sheet.Width - margin Then xs(index) = sheet.Width - margin
+        If ys(index) > sheet.Height - margin Then ys(index) = sheet.Height - margin
+        index = index + 1
     Loop
 End Sub
 
