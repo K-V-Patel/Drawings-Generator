@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.drawing.frame import BLOCK_W, border, data_table, signoff_block, title_block, title_block_height
+from app.drawing.frame import BLOCK_W, BORDER_INSET, border, data_table, signoff_block, title_block, title_block_height
 from app.drawing.prims import Prim, text
 from app.drawing.views import ROLE_LABELS, envelope_view, render_view, view_has_geometry
 
@@ -146,10 +146,11 @@ def compose(template: dict, bom_format: dict | None, job: dict) -> list[Prim]:
     roles = list(job.get("selected_views") or [])
     label_for = {v["role"]: v.get("label") or ROLE_LABELS.get(v["role"], v["role"].upper()) for v in template.get("views") or []}
 
-    outer = 0.50
-    tb_w = min(BLOCK_W, width - 1.15)
+    inset = BORDER_INSET
+    tb_w = min(BLOCK_W, width - 2 * inset - 0.4)
     tb_h = title_block_height(props, tb_w)
-    tb = (width - outer - tb_w, outer, tb_w, tb_h)
+    # Seated on the template border's lower-right corner, the way Inventor places it.
+    tb = (width - inset - tb_w, inset, tb_w, tb_h)
 
     spec = table_spec(template, bom_format)
     rows = table_rows(template, model, job.get("bom_rows") or [])
@@ -166,20 +167,20 @@ def compose(template: dict, bom_format: dict | None, job: dict) -> list[Prim]:
         tw = min(7.6, width * 0.48)
         row_h = 0.30
         th = row_h * (2 + max(len(rows), 1))
-        table_box = (outer, height - outer - th, tw, th)
+        table_box = (inset + 0.08, height - inset - th - 0.08, tw, th)
 
     info_box = None
     if (template.get("table") or {}).get("kind") == "signoff" or template.get("drawing_type") == "signoff":
-        info_w = min(6.6, tb[0] - outer - 0.2)
-        info_box = (outer, outer, info_w, tb_h)
+        info_w = min(6.6, tb[0] - inset - 0.25)
+        info_box = (inset + 0.08, inset, info_w, tb_h)
 
-    bottom = outer + tb_h + 0.22
-    top = height - outer - 0.12
+    bottom = inset + tb_h + 0.28
+    top = height - inset - 0.16
     # Parts lists sit in the top left. Keep weldment and assembly views below them.
     # A part bend table is short, and the isometric sits beside it.
     if table_box and template.get("drawing_type") != "part":
         top = min(top, table_box[1] - 0.1)
-    area = (outer + 0.06, bottom, width - 2 * outer - 0.12, max(top - bottom, 1))
+    area = (inset + 0.12, bottom, width - 2 * inset - 0.24, max(top - bottom, 1))
     boxes = allocate(roles, area, table_box, template.get("drawing_type") or "part")
 
     prims: list[Prim] = []
@@ -198,5 +199,5 @@ def compose(template: dict, bom_format: dict | None, job: dict) -> list[Prim]:
 
     note = job.get("sample_note")
     if note:
-        prims.append(text(outer, height - 0.28, note, size=0.07, bold=True))
+        prims.append(text(inset + 0.12, height - inset - 0.08, note, size=0.07, bold=True))
     return prims

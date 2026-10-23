@@ -120,6 +120,8 @@ def test_ipt_sheet_has_no_parts_list_and_description_can_grow(client):
     assert "Solid Square Cover Plate" in svg
     assert "Steel, Mild" in svg
     assert "THIRD ANGLE" in svg
+    assert ">A</text>" in svg
+    assert ">8</text>" in svg
     assert "BEND ID" not in svg
     assert "Parts List" not in svg
     assert "ITEM QTY" not in svg

@@ -771,8 +771,46 @@
     return lines;
   }
 
+  const BORDER_INSET = 0.50;
+
+  function zoneCounts(width, height) {
+    const innerW = Math.max(width - 2 * BORDER_INSET, 4);
+    const innerH = Math.max(height - 2 * BORDER_INSET, 3);
+    return [Math.max(4, Math.round(innerW / 2)), Math.max(2, Math.round(innerH / 2.5))];
+  }
+
   function border(width, height) {
-    return [rect(0.38, 0.38, width - 0.76, height - 0.76, "BORDER"), rect(0.5, 0.5, width - 1, height - 1, "THIN")];
+    const margin = BORDER_INSET;
+    const [cols, rows] = zoneCounts(width, height);
+    const innerW = width - 2 * margin;
+    const innerH = height - 2 * margin;
+    const colW = innerW / cols;
+    const rowH = innerH / rows;
+    const tick = 0.18;
+    const prims = [rect(margin, margin, innerW, innerH, "BORDER")];
+    for (let index = 0; index < cols; index += 1) {
+      const x = margin + index * colW;
+      const number = String(cols - index);
+      const center = x + colW / 2;
+      prims.push(text(center, height - 0.22, number, 0.11, "middle"));
+      prims.push(text(center, 0.12, number, 0.11, "middle"));
+      if (index) {
+        prims.push(line(x, height - margin, x, height - margin + tick, "THIN"));
+        prims.push(line(x, margin, x, margin - tick, "THIN"));
+      }
+    }
+    for (let index = 0; index < rows; index += 1) {
+      const y = margin + index * rowH;
+      const letter = String.fromCharCode(65 + index);
+      const baseline = y + rowH / 2 - 0.04;
+      prims.push(text(margin - 0.08, baseline, letter, 0.11, "end"));
+      prims.push(text(width - margin + 0.08, baseline, letter, 0.11));
+      if (index) {
+        prims.push(line(margin - tick, y, margin, y, "THIN"));
+        prims.push(line(width - margin, y, width - margin + tick, y, "THIN"));
+      }
+    }
+    return prims;
   }
 
   const BLOCK_W = 8.20;
@@ -1084,10 +1122,10 @@
     const roles = job.selectedViews || [];
     const labels = {};
     (item.views || []).forEach((view) => { labels[view.role] = view.label || ROLE_LABELS[view.role] || view.role.toUpperCase(); });
-    const outer = 0.5;
-    const tbW = Math.min(BLOCK_W, width - 1.15);
+    const inset = BORDER_INSET;
+    const tbW = Math.min(BLOCK_W, width - 2 * inset - 0.4);
     const tbH = titleBlockHeight(props, tbW);
-    const tb = [width - outer - tbW, outer, tbW, tbH];
+    const tb = [width - inset - tbW, inset, tbW, tbH];
     const kind = (item.table || {}).kind;
     let spec = null;
     let rows = [];
@@ -1100,14 +1138,14 @@
     if (spec && spec[1].length) {
       const tw = Math.min(7.6, width * 0.48);
       const th = 0.3 * (2 + Math.max(rows.length, 1));
-      tableBox = [outer, height - outer - th, tw, th];
+      tableBox = [inset + 0.08, height - inset - th - 0.08, tw, th];
     }
     let infoBox = null;
-    if (kind === "signoff" || item.drawingType === "signoff") infoBox = [outer, outer, Math.min(6.6, tb[0] - outer - 0.2), tbH];
-    let top = height - outer - 0.12;
-    const bottom = outer + tbH + 0.22;
+    if (kind === "signoff" || item.drawingType === "signoff") infoBox = [inset + 0.08, inset, Math.min(6.6, tb[0] - inset - 0.25), tbH];
+    let top = height - inset - 0.16;
+    const bottom = inset + tbH + 0.28;
     if (tableBox && item.drawingType !== "part") top = Math.min(top, tableBox[1] - 0.1);
-    const boxes = allocate(roles, [outer + 0.06, bottom, width - 2 * outer - 0.12, Math.max(top - bottom, 1)], item.drawingType || "part");
+    const boxes = allocate(roles, [inset + 0.12, bottom, width - 2 * inset - 0.24, Math.max(top - bottom, 1)], item.drawingType || "part");
     const prims = border(width, height);
     roles.forEach((role) => {
       const box = boxes[role];

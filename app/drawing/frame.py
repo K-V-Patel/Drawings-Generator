@@ -31,13 +31,51 @@ def wrap(value: str, width_in: float, size: float) -> list[str]:
     return lines
 
 
+# Inventor Default Border inset. The title block is seated on the lower-right corner.
+BORDER_INSET = 0.50
+
+
+def _zone_counts(width: float, height: float) -> tuple[int, int]:
+    inner_w = max(width - 2 * BORDER_INSET, 4.0)
+    inner_h = max(height - 2 * BORDER_INSET, 3.0)
+    cols = max(4, int(round(inner_w / 2.0)))
+    rows = max(2, int(round(inner_h / 2.5)))
+    return cols, rows
+
+
 def border(width: float, height: float) -> list[Prim]:
-    outer = 0.38
-    inner = 0.50
-    return [
-        rect(outer, outer, width - 2 * outer, height - 2 * outer, layer="BORDER"),
-        rect(inner, inner, width - 2 * inner, height - 2 * inner, layer="THIN"),
-    ]
+    """Default Border from the Inventor drawing template.
+
+    One frame, zone numbers from the right, zone letters from the bottom.
+    Views and dimensions are added inside this frame.
+    """
+    margin = BORDER_INSET
+    cols, rows = _zone_counts(width, height)
+    inner_w = width - 2 * margin
+    inner_h = height - 2 * margin
+    col_w = inner_w / cols
+    row_h = inner_h / rows
+    tick = 0.18
+    prims: list[Prim] = [rect(margin, margin, inner_w, inner_h, layer="BORDER")]
+    for index in range(cols):
+        x = margin + index * col_w
+        number = str(cols - index)
+        center = x + col_w / 2
+        prims.append(text(center, height - 0.22, number, size=0.11, anchor="middle"))
+        prims.append(text(center, 0.12, number, size=0.11, anchor="middle"))
+        if index:
+            prims.append(line(x, height - margin, x, height - margin + tick, layer="THIN"))
+            prims.append(line(x, margin, x, margin - tick, layer="THIN"))
+    for index in range(rows):
+        y = margin + index * row_h
+        letter = chr(ord("A") + index)
+        baseline = y + row_h / 2 - 0.04
+        prims.append(text(margin - 0.08, baseline, letter, size=0.11, anchor="end"))
+        prims.append(text(width - margin + 0.08, baseline, letter, size=0.11))
+        if index:
+            prims.append(line(margin - tick, y, margin, y, layer="THIN"))
+            prims.append(line(width - margin, y, width - margin + tick, y, layer="THIN"))
+    return prims
 
 
 # standard-desc2: the Standard.idw / Standard.dwg title block.
