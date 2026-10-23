@@ -7,7 +7,7 @@
 ' stay aligned. The isometric view uses the model Home view. Overall
 ' dimensions are added on the orthographic views.
 ' An assembly also gets a parts list. When it has more than one part,
-' each part gets an item balloon.
+' each part gets one balloon in a straight column beside the isometric view.
 '
 ' The drawing is saved as the part number .idw in the sibling Drawing
 ' folder when that folder exists, otherwise beside the model. An existing
@@ -355,8 +355,11 @@ Function AddItemBalloons(sheet As Sheet, model As Document, views As Dictionary(
         If occurrenceCount < 2 AndAlso targets.Count < 2 Then Return ""
         If targets.Count = 0 Then Return ""
         ShowAssemblyParts(sheet, views)
-        Dim pitch As Double = BalloonPitch(views, targets.Count)
+        Dim pitch As Double = BalloonPitch(sheet, views, targets.Count)
         Dim nextY As New Dictionary(Of String, Double)
+        If views.ContainsKey("iso") Then
+            nextY("iso") = ColumnStart(sheet, views("iso"), pitch, targets.Count)
+        End If
         Dim placed As Integer = 0
         Dim problem As String = ""
         Dim roles As New List(Of String)
@@ -380,17 +383,31 @@ Function AddItemBalloons(sheet As Sheet, model As Document, views As Dictionary(
     End Try
 End Function
 
-Function BalloonPitch(views As Dictionary(Of String, DrawingView), count As Integer) As Double
-    Dim pitch As Double = 1.2
-    If Not views.ContainsKey("iso") Then Return pitch
+Function BalloonPitch(sheet As Sheet, views As Dictionary(Of String, DrawingView), count As Integer) As Double
+    Dim pitch As Double = 1.7
     If count < 2 Then Return pitch
-    Dim iso As DrawingView = views("iso")
-    Dim room As Double = iso.Position.Y + iso.Height / 2 - 1.5
+    Dim room As Double = sheet.Height - 5.0
+    If views.ContainsKey("iso") Then
+        Dim beside As Double = views("iso").Height + 6.0
+        If beside < room Then room = beside
+    End If
     If room <= 0 Then Return pitch
     Dim needed As Double = pitch * (count - 1)
     If needed > room Then pitch = room / (count - 1)
-    If pitch < 0.8 Then pitch = 0.8
+    If pitch < 1.45 Then pitch = 1.45
     Return pitch
+End Function
+
+Function ColumnStart(sheet As Sheet, host As DrawingView, pitch As Double, count As Integer) As Double
+    Dim span As Double = 0
+    If count > 1 Then span = pitch * (count - 1)
+    Dim startY As Double = host.Position.Y + span / 2
+    Dim topLimit As Double = sheet.Height - 2.4
+    Dim bottomLimit As Double = 2.4
+    If startY > topLimit Then startY = topLimit
+    If startY - span < bottomLimit Then startY = bottomLimit + span
+    If startY > topLimit Then startY = topLimit
+    Return startY
 End Function
 
 Function CountOccurrences(asm As AssemblyDocument) As Integer
@@ -486,15 +503,15 @@ Function BalloonOne(sheet As Sheet, views As Dictionary(Of String, DrawingView),
         If Not views.ContainsKey(role) Then Continue For
         Dim host As DrawingView = views(role)
         Dim curves As List(Of DrawingCurve) = CurvesForPart(host, occ)
-        Dim limit As Integer = curves.Count
-        If limit > 8 Then limit = 8
+        Dim tip As Point2d = BalloonTip(sheet, host, role, nextY, tg)
+        Dim order As List(Of Integer) = NearCurveOrder(curves, tip, host)
         Dim index As Integer = 0
-        Do While index < limit
-            Dim curve As DrawingCurve = curves(index)
+        Do While index < order.Count
+            Dim curve As DrawingCurve = curves(order(index))
             index = index + 1
-            Dim tip As Point2d = BalloonTip(sheet, host, role, nextY, tg)
             Dim failure As String = PlaceBalloon(sheet, curve, tip)
             If failure = "" Then
+                If Not nextY.ContainsKey(role) Then nextY(role) = tip.Y
                 nextY(role) = nextY(role) - pitch
                 Return ""
             End If
@@ -563,18 +580,58 @@ Function IsLine(curve As DrawingCurve) As Boolean
 End Function
 
 Function BalloonTip(sheet As Sheet, host As DrawingView, role As String, nextY As Dictionary(Of String, Double), tg As TransientGeometry) As Point2d
-    If Not nextY.ContainsKey(role) Then
-        Dim startY As Double = host.Position.Y + host.Height / 2
-        If startY > sheet.Height - 2.0 Then startY = sheet.Height - 2.0
-        nextY(role) = startY
-    End If
-    Dim tipY As Double = nextY(role)
-    If tipY < 2.0 Then tipY = 2.0
-    Dim tipX As Double = host.Position.X - host.Width / 2 - 1.8
-    If tipX < 2.0 Then tipX = host.Position.X + host.Width / 2 + 1.8
-    If tipX > sheet.Width - 2.0 Then tipX = sheet.Width - 2.0
-    If tipX < 2.0 Then tipX = 2.0
+    Dim tipX As Double = BalloonColumnX(sheet, host)
+    Dim tipY As Double = host.Position.Y
+    If nextY.ContainsKey(role) Then tipY = nextY(role)
     Return tg.CreatePoint2d(tipX, tipY)
+End Function
+
+Function BalloonColumnX(sheet As Sheet, host As DrawingView) As Double
+    Dim clearance As Double = 3.6
+    Dim margin As Double = 2.4
+    Dim rightX As Double = host.Position.X + host.Width / 2 + clearance
+    If rightX <= sheet.Width - margin Then Return rightX
+    Dim leftX As Double = host.Position.X - host.Width / 2 - clearance
+    If leftX >= margin Then Return leftX
+    Return sheet.Width - margin
+End Function
+
+Function NearCurveOrder(curves As List(Of DrawingCurve), tip As Point2d, host As DrawingView) As List(Of Integer)
+    Dim order As New List(Of Integer)
+    Dim used As New List(Of Integer)
+    Dim span As Integer = curves.Count
+    If span > 80 Then span = 80
+    Dim picks As Integer = 0
+    Do While picks < 8
+        Dim best As Integer = -1
+        Dim bestScore As Double = 1.0E+30
+        Dim index As Integer = 0
+        Do While index < span
+            If Not used.Contains(index) Then
+                Dim mid As Point2d = PointOnCurve(curves(index))
+                If mid IsNot Nothing Then
+                    Dim dx As Double = mid.X - tip.X
+                    Dim dy As Double = mid.Y - tip.Y
+                    Dim score As Double = dx * dx + dy * dy
+                    If host IsNot Nothing AndAlso host.Position IsNot Nothing Then
+                        Dim toward As Double = tip.X - host.Position.X
+                        Dim edgeSide As Double = mid.X - host.Position.X
+                        If toward * edgeSide < 0 Then score = score + host.Width * host.Width
+                    End If
+                    If score < bestScore Then
+                        bestScore = score
+                        best = index
+                    End If
+                End If
+            End If
+            index = index + 1
+        Loop
+        If best < 0 Then Exit Do
+        used.Add(best)
+        order.Add(best)
+        picks = picks + 1
+    Loop
+    Return order
 End Function
 
 Function CurveOwner(curve As DrawingCurve) As ComponentOccurrence
@@ -665,18 +722,12 @@ End Function
 
 Function LeaderElbow(tip As Point2d, attach As Point2d) As Point2d
     If tip Is Nothing OrElse attach Is Nothing Then Return Nothing
-    Dim dx As Double = attach.X - tip.X
-    Dim dy As Double = attach.Y - tip.Y
-    Dim elbowX As Double = tip.X
-    Dim elbowY As Double = tip.Y
-    If Math.Abs(dx) >= Math.Abs(dy) Then
-        elbowX = tip.X + dx * 0.65
-    Else
-        elbowY = tip.Y + dy * 0.65
-    End If
-    If Math.Abs(elbowX - tip.X) < 0.3 AndAlso Math.Abs(elbowY - tip.Y) < 0.3 Then Return Nothing
-    If Math.Abs(elbowX - attach.X) < 0.15 AndAlso Math.Abs(elbowY - attach.Y) < 0.15 Then Return Nothing
-    Return ThisApplication.TransientGeometry.CreatePoint2d(elbowX, elbowY)
+    ' Short horizontal shoulder so the balloon column stays in one line.
+    Dim shoulder As Double = 1.3
+    Dim elbowX As Double = tip.X + shoulder
+    If attach.X < tip.X Then elbowX = tip.X - shoulder
+    If Math.Abs(elbowX - attach.X) < 0.3 Then Return Nothing
+    Return ThisApplication.TransientGeometry.CreatePoint2d(elbowX, tip.Y)
 End Function
 
 Function CommitBalloon(sheet As Sheet, points As ObjectCollection, useLevel As Boolean) As String
