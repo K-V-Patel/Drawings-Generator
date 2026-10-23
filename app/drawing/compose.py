@@ -8,6 +8,7 @@ from app.drawing.views import (
     ROLE_LABELS,
     apply_view_style,
     attach_balloons,
+    balloon_stack,
     envelope_view,
     owned_dims,
     place_third_angle,
@@ -193,10 +194,19 @@ def compose(template: dict, bom_format: dict | None, job: dict) -> list[Prim]:
             spec = None
     table_box = None
     if spec and spec[1]:
-        tw = min(7.6, width * 0.48)
-        row_h = 0.30
-        th = row_h * (2 + max(len(rows), 1))
-        table_box = (inset + 0.08, height - inset - th - 0.08, tw, th)
+        count = max(len(rows), 1)
+        if template.get("drawing_type") == "part":
+            tw = min(7.6, width * 0.48)
+            th = 0.30 * (2 + count)
+            table_box = (inset + 0.08, height - inset - th - 0.08, tw, th)
+        else:
+            # Beside the title block, so the views keep the top of the sheet.
+            tw = min(7.5, max(tb[0] - inset - 0.28, 4.2))
+            th = 0.22 * (2 + count)
+            limit = height - inset - 0.35
+            if inset + th > limit:
+                th = max(limit - inset, 1.2)
+            table_box = (inset + 0.08, inset, tw, th)
 
     info_box = None
     if (template.get("table") or {}).get("kind") == "signoff" or template.get("drawing_type") == "signoff":
@@ -204,17 +214,17 @@ def compose(template: dict, bom_format: dict | None, job: dict) -> list[Prim]:
         info_box = (inset + 0.08, inset, info_w, tb_h)
 
     bottom = inset + tb_h + 0.28
-    top = height - inset - 0.16
-    # Parts lists sit in the top left. Keep weldment and assembly views below them.
-    # A part bend table is short, and the isometric sits beside it.
     if table_box and template.get("drawing_type") != "part":
-        top = min(top, table_box[1] - 0.1)
+        bottom = max(bottom, table_box[1] + table_box[3] + 0.2)
+    top = height - inset - 0.16
     area = (inset + 0.12, bottom, width - 2 * inset - 0.24, max(top - bottom, 1))
     overall = model.get("overall") or {}
     authored = any(view_has_geometry((model.get("views") or {}).get(role)) for role in roles)
+    balloon_role = next((role for role in ("iso", "front", "side") if role in roles), None)
+    use_balloons = source == "iam" and want_balloons and want_parts and bool(rows) and bool(balloon_role)
     placement = None
     if not authored and template.get("drawing_type") != "signoff":
-        placement = place_third_angle(roles, area, overall)
+        placement = place_third_angle(roles, area, overall, 1.15 if use_balloons else 0.0)
     boxes = {} if placement else allocate(roles, area, table_box, template.get("drawing_type") or "part")
     if placement:
         covered = set(placement["views"])
@@ -228,8 +238,6 @@ def compose(template: dict, bom_format: dict | None, job: dict) -> list[Prim]:
 
     prims: list[Prim] = []
     prims.extend(border(width, height))
-    balloon_role = next((role for role in ("iso", "front", "side") if role in roles), None)
-    use_balloons = source == "iam" and want_balloons and want_parts and bool(rows) and bool(balloon_role)
     try:
         length = float(overall.get("length") or 0)
         width_in = float(overall.get("width") or 0)
@@ -239,7 +247,7 @@ def compose(template: dict, bom_format: dict | None, job: dict) -> list[Prim]:
     owned = owned_dims(roles, length, width_in, height_in) if placement else {}
     for role in roles:
         view = _resolve(model, role, style, ann, annotation)
-        if use_balloons and role == balloon_role:
+        if use_balloons and not placement and role == balloon_role:
             view = attach_balloons(view, rows)
         label = label_for.get(role, "")
         placed = placement["views"].get(role) if placement else None
@@ -266,6 +274,18 @@ def compose(template: dict, bom_format: dict | None, job: dict) -> list[Prim]:
         if not box:
             continue
         prims.extend(render_view(view, role, label, box))
+    if use_balloons and placement:
+        target = placement.get("iso")
+        placed = (placement.get("views") or {}).get(balloon_role or "")
+        if not target and placed:
+            target = (
+                placed["ox"],
+                placed["oy"],
+                placed["mw"] * placement["scale"],
+                placed["mh"] * placement["scale"],
+            )
+        if target:
+            prims.extend(balloon_stack(rows, target, width - inset - 0.02))
     if table_box and spec:
         prims.extend(data_table(*table_box, spec[0], spec[1], rows))
     prims.extend(title_block(*tb, company, props))

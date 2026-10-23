@@ -92,7 +92,10 @@ def owned_dims(roles: list[str], length: float, width: float, height: float) -> 
     return owned
 
 
-_NICE_SCALES = (10, 5, 4, 2, 1, 0.5, 0.25, 0.2, 0.125, 0.1, 1 / 16, 0.05, 1 / 32, 0.02, 0.01)
+_NICE_SCALES = (
+    10, 5, 4, 2, 1, 0.5, 0.25, 0.2, 0.125, 0.1,
+    1 / 12, 1 / 16, 0.05, 1 / 24, 1 / 30, 1 / 32, 0.025, 0.02, 1 / 64, 0.01,
+)
 
 
 def snap_scale(exact: float) -> float:
@@ -112,8 +115,8 @@ def scale_label(scale: float) -> str:
     return f"SCALE {scale:.3f}"
 
 
-def place_third_angle(roles: list[str], area, overall: dict) -> dict | None:
-    """Inventor third-angle arrangement: top above front, right side beside front, iso at the upper right."""
+def place_third_angle(roles: list[str], area, overall: dict, right_reserve: float = 0.0) -> dict | None:
+    """Third-angle views, large enough to read. Side and end stack so a long assembly is not three stamps in a row."""
     length = _as_float(overall.get("length"))
     width = _as_float(overall.get("width"))
     height = _as_float(overall.get("height"))
@@ -121,15 +124,10 @@ def place_third_angle(roles: list[str], area, overall: dict) -> dict | None:
         return None
     x, y, aw, ah = area
     roles = list(roles)
-    iso_box = None
-    if "iso" in roles:
-        iso_w = min(aw * 0.34, 5.6)
-        iso_box = (x + aw - iso_w, y + ah * 0.42, iso_w, ah * 0.58)
-        aw -= iso_w + 0.25
     flat_box = None
     if "flat" in roles:
-        flat_h = min(ah * 0.30, 3.2)
-        flat_box = (x, y, max(aw, 1), flat_h)
+        flat_h = min(ah * 0.28, 2.6)
+        flat_box = (x, y, max(aw - right_reserve, 1), flat_h)
         y += flat_h + 0.2
         ah -= flat_h + 0.2
     columns = []
@@ -146,46 +144,98 @@ def place_third_angle(roles: list[str], area, overall: dict) -> dict | None:
         center.append("top")
     if center:
         columns.append(center)
-    for role in ("side", "end", "section"):
-        if role in roles:
-            columns.append([role])
+    depth = [role for role in ("side", "end", "section") if role in roles]
+    if depth:
+        columns.append(depth)
     if not columns or aw < 1.5 or ah < 1.5:
         return None
 
     def wh(role):
         return profile_size(role, length, width, height)
 
-    gap = 0.85
+    gap = 0.72
     model_w = sum(max(wh(role)[0] for role in column) for column in columns)
     model_h = max(sum(wh(role)[1] for role in column) for column in columns)
     gaps_x = max(len(columns) - 1, 0)
     gaps_y = max(max(len(column) - 1, 0) for column in columns)
-    avail_w = aw - 1.3
-    avail_h = ah - 1.15
+    avail_w = aw - right_reserve - 1.05
+    avail_h = ah - 0.95
     if model_w <= 0 or model_h <= 0 or avail_w <= 0.5 or avail_h <= 0.5:
         return None
     exact = min((avail_w - gap * gaps_x) / model_w, (avail_h - gap * gaps_y) / model_h)
-    scale = snap_scale(exact)
-    sheet_w = model_w * scale + gap * gaps_x
-    sheet_h = model_h * scale + gap * gaps_y
-    cursor_x = x + 0.7 + max(0, (avail_w - sheet_w) / 2)
-    origin_y = y + 0.7 + max(0, (avail_h - sheet_h) / 2)
-    placed = {}
-    for column in columns:
-        cursor_y = origin_y
-        column_w = max(wh(role)[0] for role in column)
-        for role in column:
-            mw, mh = wh(role)
-            placed[role] = {
-                "ox": cursor_x + (column_w - mw) * scale / 2,
-                "oy": cursor_y,
-                "mw": mw,
-                "mh": mh,
-            }
-            cursor_y += mh * scale + gap
-        cursor_x += column_w * scale + gap
+    candidates = [scale for scale in _NICE_SCALES if scale <= exact * 1.001] or [max(exact, 0.01)]
+    want_iso = "iso" in roles
+
+    def layout(scale: float):
+        cursor_x = x + 0.72
+        origin_y = y + 0.82
+        placed = {}
+        for column in columns:
+            cursor_y = origin_y
+            column_w = max(wh(role)[0] for role in column)
+            for role in column:
+                mw, mh = wh(role)
+                placed[role] = {
+                    "ox": cursor_x + (column_w - mw) * scale / 2,
+                    "oy": cursor_y,
+                    "mw": mw,
+                    "mh": mh,
+                }
+                cursor_y += mh * scale + gap
+            cursor_x += column_w * scale + gap
+        used_right = max(item["ox"] + item["mw"] * scale for item in placed.values())
+        used_top = max(item["oy"] + item["mh"] * scale for item in placed.values())
+        return placed, used_right, used_top
+
+    scale = candidates[-1]
+    placed, used_right, used_top = layout(scale)
+    for candidate in candidates:
+        trial_placed, trial_right, trial_top = layout(candidate)
+        free_right = (x + aw - right_reserve) - trial_right
+        if want_iso and free_right < 2.5 and candidate != candidates[-1]:
+            continue
+        scale = candidate
+        placed, used_right, used_top = trial_placed, trial_right, trial_top
+        break
+
+    iso_box = None
+    if want_iso:
+        free_right = (x + aw - right_reserve) - used_right
+        free_above = (y + ah) - used_top
+        if free_right >= 2.1:
+            iso_box = (used_right + 0.28, y + 0.12, free_right - 0.28, max(ah - 0.22, 1.4))
+        elif free_above >= 1.7:
+            iso_w = min(4.8, max(aw * 0.36, 2.2))
+            iso_box = (x + aw - right_reserve - iso_w, used_top + 0.18, iso_w, max(free_above - 0.28, 1.4))
     base = "front" if "front" in placed else next(iter(placed))
     return {"views": placed, "scale": scale, "base": base, "iso": iso_box, "flat": flat_box}
+
+
+def balloon_stack(rows: list[dict], box: tuple, limit_x: float) -> list[Prim]:
+    """Item balloons in a column beside a view. Sheet inches, so the leaders stay short."""
+    x, y, w, h = box
+    count = min(len(rows), 16)
+    if count <= 0 or w <= 0 or h <= 0:
+        return []
+    pitch = 0.34
+    if pitch * max(count - 1, 1) > h - 0.2:
+        pitch = max(0.26, (h - 0.2) / max(count - 1, 1))
+    stack = pitch * (count - 1)
+    top = y + (h + stack) / 2
+    cx = min(x + w + 0.50, limit_x - 0.16)
+    prims: list[Prim] = []
+    radius = 0.13
+    for index, row in enumerate(rows[:count]):
+        item = row.get("item")
+        if item in (None, ""):
+            item = index + 1
+        by = top - index * pitch
+        ty = min(max(by, y + 0.1), y + h - 0.1)
+        prims.append(circle(cx, by, radius, layer="THIN"))
+        prims.append(text(cx, by - 0.035, str(item), size=0.08, anchor="middle", bold=True))
+        prims.append(line(cx - radius, by, x + w, ty, layer="THIN"))
+        prims.append(solid([(x + w, ty), (x + w - 0.07, ty + 0.028), (x + w - 0.07, ty - 0.028)]))
+    return prims
 
 
 def envelope_view(role: str, overall: dict, view_style: str = "hidden-line-removed", annotation_size: float = 0.10) -> dict:

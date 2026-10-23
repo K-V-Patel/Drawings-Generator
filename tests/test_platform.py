@@ -717,4 +717,6 @@ def test_inventor_json_export_keeps_the_gantry_description_and_parts_list(client
     assert "Parts List" in svg
     assert "181.875" in svg
     assert "60.5" in svg
+    assert "1 : 100" not in svg
+    assert "SCALE 1 :" in svg
     assert any("no view curves" in item["detail"] for item in sheet["sop"])

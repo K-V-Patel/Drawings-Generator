@@ -1252,7 +1252,7 @@
     return known ? [length, height] : [length, width];
   }
 
-  const NICE_SCALES = [10, 5, 4, 2, 1, 0.5, 0.25, 0.2, 0.125, 0.1, 1 / 16, 0.05, 1 / 32, 0.02, 0.01];
+  const NICE_SCALES = [10, 5, 4, 2, 1, 0.5, 0.25, 0.2, 0.125, 0.1, 1 / 12, 1 / 16, 0.05, 1 / 24, 1 / 30, 1 / 32, 0.025, 0.02, 1 / 64, 0.01];
 
   function snapScale(exact) {
     if (!(exact > 0)) return exact;
@@ -1283,22 +1283,16 @@
     return owned;
   }
 
-  function placeThirdAngle(roles, area, overall) {
+  function placeThirdAngle(roles, area, overall, rightReserve = 0) {
     const length = num(overall.length);
     const width = num(overall.width);
     const height = num(overall.height);
     if (!(length > 0 && width > 0)) return null;
     let [x, y, aw, ah] = area;
-    let iso = null;
-    if (roles.includes("iso")) {
-      const isoW = Math.min(aw * 0.34, 5.6);
-      iso = [x + aw - isoW, y + ah * 0.42, isoW, ah * 0.58];
-      aw -= isoW + 0.25;
-    }
     let flat = null;
     if (roles.includes("flat")) {
-      const flatH = Math.min(ah * 0.3, 3.2);
-      flat = [x, y, Math.max(aw, 1), flatH];
+      const flatH = Math.min(ah * 0.28, 2.6);
+      flat = [x, y, Math.max(aw - rightReserve, 1), flatH];
       y += flatH + 0.2;
       ah -= flatH + 0.2;
     }
@@ -1310,34 +1304,87 @@
     else if (roles.includes("back")) center.push("back");
     if (roles.includes("top")) center.push("top");
     if (center.length) columns.push(center);
-    ["side", "end", "section"].forEach((role) => { if (roles.includes(role)) columns.push([role]); });
+    const depth = ["side", "end", "section"].filter((role) => roles.includes(role));
+    if (depth.length) columns.push(depth);
     if (!columns.length || aw < 1.5 || ah < 1.5) return null;
     const wh = (role) => profileSize(role, length, width, height);
-    const gap = 0.85;
+    const gap = 0.72;
     const modelW = columns.reduce((sum, column) => sum + Math.max(...column.map((role) => wh(role)[0])), 0);
     const modelH = Math.max(...columns.map((column) => column.reduce((sum, role) => sum + wh(role)[1], 0)));
     const gapsX = Math.max(columns.length - 1, 0);
     const gapsY = Math.max(...columns.map((column) => Math.max(column.length - 1, 0)));
-    const availW = aw - 1.3;
-    const availH = ah - 1.15;
+    const availW = aw - rightReserve - 1.05;
+    const availH = ah - 0.95;
     if (!(modelW > 0 && modelH > 0 && availW > 0.5 && availH > 0.5)) return null;
-    const scale = snapScale(Math.min((availW - gap * gapsX) / modelW, (availH - gap * gapsY) / modelH));
-    const sheetW = modelW * scale + gap * gapsX;
-    const sheetH = modelH * scale + gap * gapsY;
-    let cursorX = x + 0.7 + Math.max(0, (availW - sheetW) / 2);
-    const originY = y + 0.7 + Math.max(0, (availH - sheetH) / 2);
-    const placed = {};
-    columns.forEach((column) => {
-      let cursorY = originY;
-      const columnW = Math.max(...column.map((role) => wh(role)[0]));
-      column.forEach((role) => {
-        const [mw, mh] = wh(role);
-        placed[role] = { ox: cursorX + ((columnW - mw) * scale) / 2, oy: cursorY, mw, mh };
-        cursorY += mh * scale + gap;
+    const exact = Math.min((availW - gap * gapsX) / modelW, (availH - gap * gapsY) / modelH);
+    const candidates = NICE_SCALES.filter((scale) => scale <= exact * 1.001);
+    if (!candidates.length) candidates.push(Math.max(exact, 0.01));
+    const wantIso = roles.includes("iso");
+    const layout = (scale) => {
+      let cursorX = x + 0.72;
+      const originY = y + 0.82;
+      const placed = {};
+      columns.forEach((column) => {
+        let cursorY = originY;
+        const columnW = Math.max(...column.map((role) => wh(role)[0]));
+        column.forEach((role) => {
+          const [mw, mh] = wh(role);
+          placed[role] = { ox: cursorX + ((columnW - mw) * scale) / 2, oy: cursorY, mw, mh };
+          cursorY += mh * scale + gap;
+        });
+        cursorX += columnW * scale + gap;
       });
-      cursorX += columnW * scale + gap;
-    });
+      const usedRight = Math.max(...Object.values(placed).map((item) => item.ox + item.mw * scale));
+      const usedTop = Math.max(...Object.values(placed).map((item) => item.oy + item.mh * scale));
+      return { placed, usedRight, usedTop };
+    };
+    let scale = candidates[candidates.length - 1];
+    let { placed, usedRight, usedTop } = layout(scale);
+    for (let i = 0; i < candidates.length; i += 1) {
+      const candidate = candidates[i];
+      const trial = layout(candidate);
+      const freeRight = (x + aw - rightReserve) - trial.usedRight;
+      if (wantIso && freeRight < 2.5 && candidate !== candidates[candidates.length - 1]) continue;
+      scale = candidate;
+      placed = trial.placed;
+      usedRight = trial.usedRight;
+      usedTop = trial.usedTop;
+      break;
+    }
+    let iso = null;
+    if (wantIso) {
+      const freeRight = (x + aw - rightReserve) - usedRight;
+      const freeAbove = (y + ah) - usedTop;
+      if (freeRight >= 2.1) iso = [usedRight + 0.28, y + 0.12, freeRight - 0.28, Math.max(ah - 0.22, 1.4)];
+      else if (freeAbove >= 1.7) {
+        const isoW = Math.min(4.8, Math.max(aw * 0.36, 2.2));
+        iso = [x + aw - rightReserve - isoW, usedTop + 0.18, isoW, Math.max(freeAbove - 0.28, 1.4)];
+      }
+    }
     return { views: placed, scale, base: placed.front ? "front" : Object.keys(placed)[0], iso, flat };
+  }
+
+  function balloonStack(rows, box, limitX) {
+    const [x, y, w, h] = box;
+    const count = Math.min(rows.length, 16);
+    if (!count || w <= 0 || h <= 0) return [];
+    let pitch = 0.34;
+    if (pitch * Math.max(count - 1, 1) > h - 0.2) pitch = Math.max(0.26, (h - 0.2) / Math.max(count - 1, 1));
+    const stack = pitch * (count - 1);
+    const top = y + (h + stack) / 2;
+    const cx = Math.min(x + w + 0.5, limitX - 0.16);
+    const prims = [];
+    const radius = 0.13;
+    rows.slice(0, count).forEach((row, index) => {
+      const item = row.item === undefined || row.item === "" ? index + 1 : row.item;
+      const by = top - index * pitch;
+      const ty = Math.min(Math.max(by, y + 0.1), y + h - 0.1);
+      prims.push(circle(cx, by, radius, "THIN"));
+      prims.push(text(cx, by - 0.035, String(item), 0.08, "middle", true));
+      prims.push(line(cx - radius, by, x + w, ty, "THIN"));
+      prims.push(solid([[x + w, ty], [x + w - 0.07, ty + 0.028], [x + w - 0.07, ty - 0.028]]));
+    });
+    return prims;
   }
 
   function sheetSpan(x1, y1, x2, y2, value, size, bold, horizontal) {
@@ -1405,28 +1452,37 @@
     if (partSheet && kind === "bend" && !rows.length) spec = null;
     let tableBox = null;
     if (spec && spec[1].length) {
-      const tw = Math.min(7.6, width * 0.48);
-      const th = 0.3 * (2 + Math.max(rows.length, 1));
-      tableBox = [inset + 0.08, height - inset - th - 0.08, tw, th];
+      const count = Math.max(rows.length, 1);
+      if (item.drawingType === "part") {
+        const tw = Math.min(7.6, width * 0.48);
+        const th = 0.3 * (2 + count);
+        tableBox = [inset + 0.08, height - inset - th - 0.08, tw, th];
+      } else {
+        const tw = Math.min(7.5, Math.max(tb[0] - inset - 0.28, 4.2));
+        let th = 0.22 * (2 + count);
+        const limit = height - inset - 0.35;
+        if (inset + th > limit) th = Math.max(limit - inset, 1.2);
+        tableBox = [inset + 0.08, inset, tw, th];
+      }
     }
     let infoBox = null;
     if (kind === "signoff" || item.drawingType === "signoff") infoBox = [inset + 0.08, inset, Math.min(6.6, tb[0] - inset - 0.25), tbH];
-    let top = height - inset - 0.16;
-    const bottom = inset + tbH + 0.28;
-    if (tableBox && item.drawingType !== "part") top = Math.min(top, tableBox[1] - 0.1);
+    let bottom = inset + tbH + 0.28;
+    if (tableBox && item.drawingType !== "part") bottom = Math.max(bottom, tableBox[1] + tableBox[3] + 0.2);
+    const top = height - inset - 0.16;
     const area = [inset + 0.12, bottom, width - 2 * inset - 0.24, Math.max(top - bottom, 1)];
     const authored = roles.some((role) => geometry((model.views || {})[role]));
-    const placement = !authored && item.drawingType !== "signoff" ? placeThirdAngle(roles, area, model.overall || {}) : null;
-    const boxes = placement ? {} : allocate(roles, area, item.drawingType || "part");
-    const prims = border(width, height);
     const balloonRole = ["iso", "front", "side"].find((role) => roles.includes(role));
     const useBalloons = job.sourceKind === "iam" && display.balloons && display.partsList && rows.length && balloonRole;
+    const placement = !authored && item.drawingType !== "signoff" ? placeThirdAngle(roles, area, model.overall || {}, useBalloons ? 1.15 : 0) : null;
+    const boxes = placement ? {} : allocate(roles, area, item.drawingType || "part");
+    const prims = border(width, height);
     const owned = placement ? ownedDims(roles, num((model.overall || {}).height)) : {};
     roles.forEach((role) => {
       const authoredView = (model.views || {})[role];
       let view = geometry(authoredView) ? applyStyle(authoredView, display) : envelope(role, model.overall || {}, display.viewStyle, display.annotationSize);
       if (view && !view.empty) view = { ...view, annotationStyle: display.annotationStyle, annotationSize: display.annotationSize };
-      if (useBalloons && role === balloonRole) view = attachBalloons(view, rows);
+      if (useBalloons && !placement && role === balloonRole) view = attachBalloons(view, rows);
       if (placement && placement.views[role]) {
         const keep = owned[role] || { h: false, v: false };
         view = {
@@ -1447,6 +1503,12 @@
       if (!box) return;
       prims.push(...renderView(view, role, labels[role] || "", box));
     });
+    if (useBalloons && placement) {
+      let target = placement.iso;
+      const placed = placement.views[balloonRole];
+      if (!target && placed) target = [placed.ox, placed.oy, placed.mw * placement.scale, placed.mh * placement.scale];
+      if (target) prims.push(...balloonStack(rows, target, width - inset - 0.02));
+    }
     if (tableBox && spec) prims.push(...dataTable(...tableBox, spec[0], spec[1], rows));
     prims.push(...titleBlock(...tb, item.company || {}, props));
     if (infoBox) prims.push(...signoffBlock(...infoBox, props, item.signoffFields || []));
