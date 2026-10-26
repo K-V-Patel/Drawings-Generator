@@ -1,6 +1,8 @@
 ' CreateDrawing.vb
-' iLogic rule. Run it from an open part (.ipt) or assembly (.iam).
+' Krupa Patel. iLogic rule. Run it from an open part (.ipt) or assembly (.iam).
 ' The drawing stays open. It is not saved, and no .drawgen.json is written.
+' Template folder for Krupa Patel:
+' C:\Users\Krupa Patel\Documents\Autodesk\Inventor 2025\Templates\en-US
 '
 ' What a person usually changes:
 '   TemplateName          file name in the Inventor template folder, or a full path.
@@ -133,8 +135,10 @@ End Sub
 
 Function FindTemplate(templateFile As String) As String
     ' A value with a backslash or a slash is used as a full path.
-    ' A file name is searched in the project template folder, then the
-    ' public Inventor 2025, 2026, and 2024 English template folders.
+    ' A file name is searched in the project template folder, then
+    ' C:\Users\Krupa Patel\Documents\Autodesk\Inventor 2025\Templates\en-US,
+    ' then the public Inventor 2025, 2026, and 2024 English template folders.
+    ' If the Krupa Patel folder is missing, the search continues.
     ' Add another candidates.Add line to search a different folder.
     If templateFile = "" Then Return ""
     If templateFile.Contains("\") OrElse templateFile.Contains("/") Then
@@ -148,6 +152,7 @@ Function FindTemplate(templateFile As String) As String
         candidates.Add(System.IO.Path.Combine(folder, templateFile))
     Catch
     End Try
+    candidates.Add(System.IO.Path.Combine("C:\Users\Krupa Patel\Documents\Autodesk\Inventor 2025\Templates\en-US", templateFile))
     candidates.Add(System.IO.Path.Combine("C:\Users\Public\Documents\Autodesk\Inventor 2025\Templates\en-US", templateFile))
     candidates.Add(System.IO.Path.Combine("C:\Users\Public\Documents\Autodesk\Inventor 2026\Templates\en-US", templateFile))
     candidates.Add(System.IO.Path.Combine("C:\Users\Public\Documents\Autodesk\Inventor 2024\Templates\en-US", templateFile))
