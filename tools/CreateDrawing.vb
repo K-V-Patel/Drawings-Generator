@@ -4,14 +4,12 @@
 ' Creates a drawing from TemplateName, so the border, title block, and
 ' dimension style are the Inventor template. The front view follows the
 ' model ViewCube. Top and side are projected from that front view so they
-' stay aligned. The isometric view uses the model Home view. The parts
-' list sits on the top-left corner of the border. Item, quantity, and
-' part number columns are only as wide as their text. Front, top, and
-' side fill the open area under that list when the area is tall enough,
-' and the isometric view fills the right side. When the list is too tall,
-' every view sits to the right of the list. The scale is the largest one
-' that fits that open area, and views are kept off the parts list.
-' Overall dimensions are added on the orthographic views.
+' stay aligned until the sheet is filled. The parts list sits on the
+' top-left corner. Its columns follow that assembly's text, and the
+' description column grows or shrinks so the table leaves room for the
+' views. Front, top, and side share one scale. The isometric view has
+' its own scale and is moved, with the other views, into the open areas
+' of the sheet. Overall dimensions are added on the orthographic views.
 ' When the assembly has more than one part, each part gets one balloon just outside that part
 ' on the isometric view. Balloons that already fall in a row or a column
 ' share that line. Item numbers are not stacked in order.
@@ -87,9 +85,8 @@ Sub Main()
             ShowAssemblyParts(sheet, views)
             TryAddPartsList(drawDoc, sheet, views("front"), tg)
         End If
-        PositionViews(sheet, views, tg)
         QuietUpdate(drawDoc)
-        ShrinkToSheet(drawDoc, sheet, views, tg)
+        ShrinkToSheet(drawDoc, sheet, views, tg, model)
         NameView(views("front"), "FRONT")
         NameView(views("top"), "TOP")
         NameView(views("side"), "SIDE")
@@ -167,65 +164,13 @@ Function FitScale(sheet As Sheet, model As Document, front As DrawingView) As Do
 End Function
 
 Function NiceScale(exact As Double) As Double
-    Dim choices() As Double = {2, 1, 0.5, 0.25, 0.2, 0.1, 1.0 / 12, 1.0 / 16, 0.05, 1.0 / 20, 1.0 / 24, 1.0 / 30, 1.0 / 32, 0.025, 0.02, 1.0 / 48, 1.0 / 50, 1.0 / 64, 0.01, 0.005}
+    Dim choices() As Double = {2, 1, 0.5, 0.25, 0.2, 0.1, 1.0 / 12, 1.0 / 15, 1.0 / 16, 0.05, 1.0 / 24, 1.0 / 30, 1.0 / 40, 0.02, 1.0 / 60, 1.0 / 70, 1.0 / 80, 0.01, 1.0 / 120, 0.005}
     If exact <= 0 Then Return 0.01
     For Each choice As Double In choices
         If choice <= exact * 1.001 Then Return choice
     Next
     Return choices(choices.Length - 1)
 End Function
-
-Sub PositionViews(sheet As Sheet, views As Dictionary(Of String, DrawingView), tg As TransientGeometry)
-    Dim front As DrawingView = views("front")
-    Dim topView As DrawingView = views("top")
-    Dim side As DrawingView = views("side")
-    Dim iso As DrawingView = views("iso")
-    iso.Scale = front.Scale
-    Dim gap As Double = 2.6
-    Dim oL As Double = 0
-    Dim oB As Double = 0
-    Dim zoneRight As Double = 0
-    Dim oT As Double = 0
-    Dim iL As Double = 0
-    Dim iB As Double = 0
-    Dim iR As Double = 0
-    Dim iT As Double = 0
-    ZoneFrame(sheet, oL, oB, zoneRight, oT, iL, iB, iR, iT)
-    Dim orthoW As Double = front.Width + gap + side.Width
-    Dim orthoH As Double = front.Height + gap + topView.Height
-    Dim extraW As Double = (zoneRight - oL) - orthoW
-    Dim extraH As Double = (oT - oB) - orthoH
-    ' Center the block when it fits. When it does not, pin its top to the
-    ' zone so the overflow goes down, away from the parts list.
-    Dim placeLeft As Double = oL
-    If extraW > 0 Then placeLeft = oL + extraW * 0.5
-    Dim placeBottom As Double = oT - orthoH
-    If extraH > 0 Then placeBottom = oB + extraH * 0.5
-    Dim frontX As Double = placeLeft + front.Width / 2
-    Dim frontY As Double = placeBottom + front.Height / 2
-    Dim sideX As Double = placeLeft + front.Width + gap + side.Width / 2
-    Dim sideY As Double = frontY
-    Dim topX As Double = frontX
-    Dim topY As Double = frontY + front.Height / 2 + gap + topView.Height / 2
-    TryMove(front, tg.CreatePoint2d(frontX, frontY))
-    TryMove(topView, tg.CreatePoint2d(topX, topY))
-    TryMove(side, tg.CreatePoint2d(sideX, sideY))
-    Dim isoX As Double = (iL + iR) / 2
-    Dim isoY As Double = (iB + iT) / 2
-    If iso.Width >= (iR - iL) Then
-        isoX = iL + iso.Width / 2
-    Else
-        If isoX - iso.Width / 2 < iL Then isoX = iL + iso.Width / 2
-        If isoX + iso.Width / 2 > iR Then isoX = iR - iso.Width / 2
-    End If
-    If iso.Height >= (iT - iB) Then
-        isoY = iT - iso.Height / 2
-    Else
-        If isoY - iso.Height / 2 < iB Then isoY = iB + iso.Height / 2
-        If isoY + iso.Height / 2 > iT Then isoY = iT - iso.Height / 2
-    End If
-    TryMove(iso, tg.CreatePoint2d(isoX, isoY))
-End Sub
 
 Sub TryMove(view As DrawingView, point As Point2d)
     Try
@@ -234,28 +179,377 @@ Sub TryMove(view As DrawingView, point As Point2d)
     End Try
 End Sub
 
-Sub ShrinkToSheet(drawDoc As DrawingDocument, sheet As Sheet, views As Dictionary(Of String, DrawingView), tg As TransientGeometry)
-    QuietUpdate(drawDoc)
-    views("front").Scale = LargestZoneScale(sheet, views)
-    views("iso").Scale = views("front").Scale
-    QuietUpdate(drawDoc)
-    PositionViews(sheet, views, tg)
-    QuietUpdate(drawDoc)
-    ' One step smaller only. Walking the list down to 1/200 left the gantry
-    ' tiny while the top view was still drawn on the parts list.
-    If LayoutPressure(sheet, views) > 1.05 Then
-        views("front").Scale = NextSmallerScale(views("front").Scale)
-        views("iso").Scale = views("front").Scale
-        QuietUpdate(drawDoc)
-        PositionViews(sheet, views, tg)
-        QuietUpdate(drawDoc)
-    End If
-    KeepViewsOffTable(sheet, views, tg)
-    QuietUpdate(drawDoc)
+Sub ReleaseAlignment(view As DrawingView)
     Try
-        If sheet.PartsLists.Count > 0 Then SeatPartsList(drawDoc, sheet, sheet.PartsLists.Item(1), tg)
+        view.BreakAlignment()
     Catch
     End Try
+End Sub
+
+Sub CenterInSlot(view As DrawingView, tg As TransientGeometry, slotL As Double, slotB As Double, slotR As Double, slotT As Double)
+    If view Is Nothing OrElse view.Position Is Nothing Then Return
+    Dim x As Double = (slotL + slotR) / 2
+    Dim y As Double = (slotB + slotT) / 2
+    Dim halfW As Double = view.Width / 2
+    Dim halfH As Double = view.Height / 2
+    If x - halfW < slotL Then x = slotL + halfW
+    If x + halfW > slotR Then x = slotR - halfW
+    If y - halfH < slotB Then y = slotB + halfH
+    If y + halfH > slotT Then y = slotT - halfH
+    TryMove(view, tg.CreatePoint2d(x, y))
+End Sub
+
+Function ScaleToFit(spanW As Double, spanH As Double, boxW As Double, boxH As Double) As Double
+    If boxW < 1.5 OrElse boxH < 1.5 Then Return 0.01
+    Dim fitW As Double = (boxW - 1.3) / Math.Max(spanW, 0.1)
+    Dim fitH As Double = (boxH - 1.3) / Math.Max(spanH, 0.1)
+    If fitH < fitW Then Return fitH
+    Return fitW
+End Function
+
+Function SafeSpan(view As DrawingView, model As Document, horizontal As Boolean) As Double
+    Dim measured As Double = 1
+    Try
+        If horizontal Then
+            measured = view.Width / Math.Max(view.Scale, 0.0001)
+        Else
+            measured = view.Height / Math.Max(view.Scale, 0.0001)
+        End If
+    Catch
+        measured = 1
+    End Try
+    Dim longAxis As Double = 0
+    Dim midAxis As Double = 0
+    If model IsNot Nothing Then
+        Try
+            Dim box As Box = model.ComponentDefinition.RangeBox
+            Dim dx As Double = Math.Abs(box.MaxPoint.X - box.MinPoint.X)
+            Dim dy As Double = Math.Abs(box.MaxPoint.Y - box.MinPoint.Y)
+            Dim dz As Double = Math.Abs(box.MaxPoint.Z - box.MinPoint.Z)
+            longAxis = dx
+            If dy > longAxis Then longAxis = dy
+            If dz > longAxis Then longAxis = dz
+            Dim shortAxis As Double = dx
+            If dy < shortAxis Then shortAxis = dy
+            If dz < shortAxis Then shortAxis = dz
+            midAxis = dx + dy + dz - longAxis - shortAxis
+        Catch
+        End Try
+    End If
+    If longAxis < 1 Then Return measured
+    ' A replaced camera can make Width/Scale many times the model. Trust the range box then.
+    If measured > longAxis * 1.35 OrElse measured < 0.2 Then
+        Dim longSide As Boolean = True
+        Try
+            longSide = view.Width >= view.Height
+        Catch
+        End Try
+        If horizontal = longSide Then Return longAxis
+        If midAxis < 0.2 Then Return longAxis
+        Return midAxis
+    End If
+    Return measured
+End Function
+
+Sub ShrinkToSheet(drawDoc As DrawingDocument, sheet As Sheet, views As Dictionary(Of String, DrawingView), tg As TransientGeometry, model As Document)
+    views("front").Scale = 0.02
+    views("iso").Scale = 0.02
+    QuietUpdate(drawDoc)
+    If sheet.PartsLists.Count > 0 Then FitTableForSheet(drawDoc, sheet, tg)
+    QuietUpdate(drawDoc)
+    Dim frontW As Double = SafeSpan(views("front"), model, True)
+    Dim frontH As Double = SafeSpan(views("front"), model, False)
+    Dim topW As Double = SafeSpan(views("top"), model, True)
+    Dim topH As Double = SafeSpan(views("top"), model, False)
+    Dim sideW As Double = SafeSpan(views("side"), model, True)
+    Dim sideH As Double = SafeSpan(views("side"), model, False)
+    Dim isoW As Double = SafeSpan(views("iso"), model, True)
+    Dim isoH As Double = SafeSpan(views("iso"), model, False)
+    If sheet.PartsLists.Count > 0 Then
+        PlaceAroundList(drawDoc, sheet, views, tg, frontW, frontH, topW, topH, sideW, sideH, isoW, isoH)
+    Else
+        PlaceWithoutList(drawDoc, sheet, views, tg, frontW, frontH, topW, topH, sideW, sideH, isoW, isoH)
+    End If
+    QuietUpdate(drawDoc)
+    NudgeEachView(sheet, views, tg)
+End Sub
+
+Sub PlaceAroundList(drawDoc As DrawingDocument, sheet As Sheet, views As Dictionary(Of String, DrawingView), tg As TransientGeometry, frontW As Double, frontH As Double, topW As Double, topH As Double, sideW As Double, sideH As Double, isoW As Double, isoH As Double)
+    ReleaseAlignment(views("top"))
+    ReleaseAlignment(views("side"))
+    Dim spansW As New Dictionary(Of String, Double)
+    Dim spansH As New Dictionary(Of String, Double)
+    spansW("front") = frontW
+    spansH("front") = frontH
+    spansW("top") = topW
+    spansH("top") = topH
+    spansW("side") = sideW
+    spansH("side") = sideH
+    Dim keys As New List(Of String)
+    keys.Add("front")
+    keys.Add("top")
+    keys.Add("side")
+    Dim upperKey As String = "top"
+    Dim bestTall As Double = -1
+    Dim index As Integer = 0
+    Do While index < keys.Count
+        Dim score As Double = spansH(keys(index)) / Math.Max(spansW(keys(index)), 0.1)
+        If score > bestTall Then
+            bestTall = score
+            upperKey = keys(index)
+        End If
+        index = index + 1
+    Loop
+    Dim wideKey As String = "side"
+    Dim bestWide As Double = -1
+    index = 0
+    Do While index < keys.Count
+        If keys(index) <> upperKey AndAlso spansW(keys(index)) > bestWide Then
+            bestWide = spansW(keys(index))
+            wideKey = keys(index)
+        End If
+        index = index + 1
+    Loop
+    Dim endKey As String = "front"
+    index = 0
+    Do While index < keys.Count
+        If keys(index) <> upperKey AndAlso keys(index) <> wideKey Then endKey = keys(index)
+        index = index + 1
+    Loop
+    Dim leftLimit As Double = 0
+    Dim bottomLimit As Double = 0
+    Dim rightLimit As Double = 0
+    Dim topLimit As Double = 0
+    BorderLimits(sheet, leftLimit, bottomLimit, rightLimit, topLimit)
+    Dim pad As Double = 0.55
+    Dim leftEdge As Double = leftLimit + pad
+    Dim bottomEdge As Double = bottomLimit + pad
+    Dim rightEdge As Double = rightLimit - pad
+    Dim topEdge As Double = topLimit - pad
+    Dim innerW As Double = rightEdge - leftEdge
+    Dim innerH As Double = topEdge - bottomEdge
+    Dim listL As Double = 0
+    Dim listB As Double = 0
+    Dim listR As Double = 0
+    Dim listT As Double = 0
+    Dim hasList As Boolean = False
+    Dim titleL As Double = 0
+    Dim titleB As Double = 0
+    Dim titleR As Double = 0
+    Dim titleT As Double = 0
+    Dim hasTitle As Boolean = False
+    ReadOccupied(sheet, listL, listB, listR, listT, hasList, titleL, titleB, titleR, titleT, hasTitle)
+    Dim bandTop As Double = topEdge - innerH * 0.32
+    If hasList Then bandTop = listB - 0.4
+    Dim bestScale As Double = 0
+    Dim bestUpL As Double = leftEdge
+    Dim bestUpB As Double = bandTop
+    Dim bestUpR As Double = rightEdge
+    Dim bestUpT As Double = topEdge
+    Dim bestWideL As Double = leftEdge
+    Dim bestWideB As Double = bottomEdge
+    Dim bestWideR As Double = rightEdge
+    Dim bestWideT As Double = bandTop
+    Dim bestEndL As Double = leftEdge
+    Dim bestEndB As Double = bottomEdge
+    Dim bestEndR As Double = rightEdge
+    Dim bestEndT As Double = bandTop
+    Dim bestIsoL As Double = leftEdge
+    Dim bestIsoB As Double = bottomEdge
+    Dim bestIsoR As Double = leftEdge + innerW * 0.4
+    Dim bestIsoT As Double = bandTop
+    Dim pass As Integer = 1
+    Do While pass <= 7
+        Dim upL As Double = leftEdge + innerW * 0.5
+        If hasList Then upL = listR + 0.55
+        Dim upR As Double = rightEdge
+        Dim upT As Double = topEdge
+        Dim upB As Double = bandTop
+        Dim isoL As Double = leftEdge
+        Dim isoR As Double = leftEdge + innerW * 0.42
+        If hasList AndAlso listR - 0.3 < isoR Then isoR = listR - 0.3
+        If isoR < leftEdge + innerW * 0.32 Then isoR = leftEdge + innerW * 0.32
+        If isoR > leftEdge + innerW * 0.48 Then isoR = leftEdge + innerW * 0.48
+        Dim isoB As Double = bottomEdge
+        Dim isoT As Double = bandTop - 0.35
+        Dim lowL As Double = isoR + 0.7
+        Dim lowW As Double = rightEdge - lowL
+        Dim share As Double = spansW(wideKey) / Math.Max(spansW(wideKey) + spansW(endKey), 0.1)
+        If share < 0.5 Then share = 0.5
+        If share > 0.74 Then share = 0.74
+        Dim splitGap As Double = 0.75
+        Dim wideL As Double = lowL
+        Dim wideR As Double = lowL + (lowW - splitGap) * share
+        Dim endL As Double = wideR + splitGap
+        Dim endR As Double = rightEdge
+        Dim wideB As Double = bottomEdge
+        Dim endB As Double = bottomEdge
+        If hasTitle AndAlso titleR > wideL AndAlso titleL < wideR AndAlso titleT + 0.45 > wideB Then wideB = titleT + 0.45
+        If hasTitle AndAlso titleR > endL AndAlso titleL < endR AndAlso titleT + 0.45 > endB Then endB = titleT + 0.45
+        Dim sUp As Double = ScaleToFit(spansW(upperKey), spansH(upperKey), upR - upL, upT - upB)
+        Dim sWide As Double = ScaleToFit(spansW(wideKey), spansH(wideKey), wideR - wideL, bandTop - wideB)
+        Dim sEnd As Double = ScaleToFit(spansW(endKey), spansH(endKey), endR - endL, bandTop - endB)
+        Dim sAll As Double = sUp
+        If sWide < sAll Then sAll = sWide
+        If sEnd < sAll Then sAll = sEnd
+        If sAll > bestScale Then
+            bestScale = sAll
+            bestUpL = upL
+            bestUpB = upB
+            bestUpR = upR
+            bestUpT = upT
+            bestWideL = wideL
+            bestWideB = wideB
+            bestWideR = wideR
+            bestWideT = bandTop
+            bestEndL = endL
+            bestEndB = endB
+            bestEndR = endR
+            bestEndT = bandTop
+            bestIsoL = isoL
+            bestIsoB = isoB
+            bestIsoR = isoR
+            bestIsoT = isoT
+        End If
+        If sUp < sWide AndAlso sUp < sEnd Then
+            bandTop = bandTop - innerH * 0.045
+        Else
+            bandTop = bandTop + innerH * 0.035
+        End If
+        If bandTop > topEdge - 4 Then bandTop = topEdge - 4
+        If bandTop < bottomEdge + innerH * 0.3 Then bandTop = bottomEdge + innerH * 0.3
+        pass = pass + 1
+    Loop
+    If bestScale < 0.012 Then
+        Dim fallback As Double = innerW * 0.3 / Math.Max(spansW(wideKey), 0.1)
+        If fallback > bestScale Then bestScale = fallback
+        If bestScale > 0.08 Then bestScale = 0.08
+    End If
+    views("front").Scale = NiceScale(bestScale * 0.98)
+    Dim sIso As Double = ScaleToFit(isoW, isoH, bestIsoR - bestIsoL, bestIsoT - bestIsoB)
+    views("iso").Scale = NiceScale(sIso * 0.98)
+    QuietUpdate(drawDoc)
+    If SlotOverflow(views(upperKey), bestUpR - bestUpL, bestUpT - bestUpB) OrElse SlotOverflow(views(wideKey), bestWideR - bestWideL, bestWideT - bestWideB) OrElse SlotOverflow(views(endKey), bestEndR - bestEndL, bestEndT - bestEndB) Then
+        views("front").Scale = NextSmallerScale(views("front").Scale)
+        QuietUpdate(drawDoc)
+    End If
+    If SlotOverflow(views("iso"), bestIsoR - bestIsoL, bestIsoT - bestIsoB) Then
+        views("iso").Scale = NextSmallerScale(views("iso").Scale)
+        QuietUpdate(drawDoc)
+    End If
+    CenterInSlot(views(upperKey), tg, bestUpL, bestUpB, bestUpR, bestUpT)
+    CenterInSlot(views(wideKey), tg, bestWideL, bestWideB, bestWideR, bestWideT)
+    CenterInSlot(views(endKey), tg, bestEndL, bestEndB, bestEndR, bestEndT)
+    CenterInSlot(views("iso"), tg, bestIsoL, bestIsoB, bestIsoR, bestIsoT)
+End Sub
+
+Function SlotOverflow(view As DrawingView, boxW As Double, boxH As Double) As Boolean
+    If view Is Nothing Then Return False
+    If boxW < 1 OrElse boxH < 1 Then Return False
+    If view.Width > boxW * 1.08 Then Return True
+    If view.Height > boxH * 1.08 Then Return True
+    Return False
+End Function
+
+Sub PlaceWithoutList(drawDoc As DrawingDocument, sheet As Sheet, views As Dictionary(Of String, DrawingView), tg As TransientGeometry, frontW As Double, frontH As Double, topW As Double, topH As Double, sideW As Double, sideH As Double, isoW As Double, isoH As Double)
+    Dim leftLimit As Double = 0
+    Dim bottomLimit As Double = 0
+    Dim rightLimit As Double = 0
+    Dim topLimit As Double = 0
+    BorderLimits(sheet, leftLimit, bottomLimit, rightLimit, topLimit)
+    Dim pad As Double = 0.7
+    Dim leftEdge As Double = leftLimit + pad
+    Dim bottomEdge As Double = bottomLimit + pad
+    Dim rightEdge As Double = rightLimit - pad
+    Dim topEdge As Double = topLimit - pad
+    Dim listL As Double = 0
+    Dim listB As Double = 0
+    Dim listR As Double = 0
+    Dim listT As Double = 0
+    Dim hasList As Boolean = False
+    Dim titleL As Double = 0
+    Dim titleB As Double = 0
+    Dim titleR As Double = 0
+    Dim titleT As Double = 0
+    Dim hasTitle As Boolean = False
+    ReadOccupied(sheet, listL, listB, listR, listT, hasList, titleL, titleB, titleR, titleT, hasTitle)
+    Dim split As Double = leftEdge + (rightEdge - leftEdge) * 0.62
+    Dim orthoFloor As Double = bottomEdge
+    Dim isoFloor As Double = bottomEdge
+    If hasTitle AndAlso titleL < split AndAlso titleT + 0.45 > orthoFloor Then orthoFloor = titleT + 0.45
+    If hasTitle AndAlso titleR > split AndAlso titleT + 0.45 > isoFloor Then isoFloor = titleT + 0.45
+    Dim gap As Double = 2.2
+    Dim sW As Double = (split - leftEdge - gap) / Math.Max(frontW + sideW, 0.1)
+    Dim sH As Double = (topEdge - orthoFloor - gap) / Math.Max(frontH + topH, 0.1)
+    Dim sOrtho As Double = sW
+    If sH < sOrtho Then sOrtho = sH
+    views("front").Scale = NiceScale(sOrtho * 0.96)
+    Dim sIso As Double = ScaleToFit(isoW, isoH, rightEdge - split - 0.6, topEdge - isoFloor)
+    views("iso").Scale = NiceScale(sIso * 0.96)
+    QuietUpdate(drawDoc)
+    Dim front As DrawingView = views("front")
+    Dim topView As DrawingView = views("top")
+    Dim side As DrawingView = views("side")
+    Dim blockW As Double = front.Width + gap + side.Width
+    Dim blockH As Double = front.Height + gap + topView.Height
+    Dim placeLeft As Double = leftEdge + ((split - leftEdge) - blockW) / 2
+    Dim placeBottom As Double = orthoFloor + ((topEdge - orthoFloor) - blockH) / 2
+    If placeLeft < leftEdge Then placeLeft = leftEdge
+    If placeBottom < orthoFloor Then placeBottom = orthoFloor
+    Dim frontX As Double = placeLeft + front.Width / 2
+    Dim frontY As Double = placeBottom + front.Height / 2
+    TryMove(front, tg.CreatePoint2d(frontX, frontY))
+    TryMove(topView, tg.CreatePoint2d(frontX, frontY + front.Height / 2 + gap + topView.Height / 2))
+    TryMove(side, tg.CreatePoint2d(placeLeft + front.Width + gap + side.Width / 2, frontY))
+    CenterInSlot(views("iso"), tg, split + 0.5, isoFloor, rightEdge, topEdge)
+End Sub
+
+Sub NudgeEachView(sheet As Sheet, views As Dictionary(Of String, DrawingView), tg As TransientGeometry)
+    Dim listL As Double = 0
+    Dim listB As Double = 0
+    Dim listR As Double = 0
+    Dim listT As Double = 0
+    Dim hasList As Boolean = False
+    Dim titleL As Double = 0
+    Dim titleB As Double = 0
+    Dim titleR As Double = 0
+    Dim titleT As Double = 0
+    Dim hasTitle As Boolean = False
+    ReadOccupied(sheet, listL, listB, listR, listT, hasList, titleL, titleB, titleR, titleT, hasTitle)
+    Dim names As New List(Of String)
+    names.Add("front")
+    names.Add("top")
+    names.Add("side")
+    names.Add("iso")
+    Dim index As Integer = 0
+    Do While index < names.Count
+        Dim sheetView As DrawingView = views(names(index))
+        If sheetView IsNot Nothing AndAlso sheetView.Position IsNot Nothing Then
+            Dim left As Double = sheetView.Position.X - sheetView.Width / 2
+            Dim right As Double = sheetView.Position.X + sheetView.Width / 2
+            Dim low As Double = sheetView.Position.Y - sheetView.Height / 2
+            Dim high As Double = sheetView.Position.Y + sheetView.Height / 2
+            Dim moveX As Double = 0
+            Dim moveY As Double = 0
+            If hasList AndAlso RangesHit(left, low, right, high, listL, listB, listR, listT, 0.12) Then
+                If sheetView.Position.Y < listB Then
+                    moveY = (listB - 0.3) - high
+                    If moveY > 0 Then moveY = 0
+                Else
+                    moveX = (listR + 0.3) - left
+                    If moveX < 0 Then moveX = 0
+                End If
+            End If
+            If hasTitle AndAlso RangesHit(left + moveX, low + moveY, right + moveX, high + moveY, titleL, titleB, titleR, titleT, 0.12) Then
+                Dim lift As Double = (titleT + 0.35) - (low + moveY)
+                If lift > 0 Then moveY = moveY + lift
+            End If
+            If moveX <> 0 OrElse moveY <> 0 Then
+                TryMove(sheetView, tg.CreatePoint2d(sheetView.Position.X + moveX, sheetView.Position.Y + moveY))
+            End If
+        End If
+        index = index + 1
+    Loop
 End Sub
 
 Sub KeepViewsOffTable(sheet As Sheet, views As Dictionary(Of String, DrawingView), tg As TransientGeometry)
@@ -491,7 +785,7 @@ Function SpanH(view As DrawingView) As Double
 End Function
 
 Function NextSmallerScale(current As Double) As Double
-    Dim choices() As Double = {2, 1, 0.5, 0.25, 0.2, 0.1, 1.0 / 12, 1.0 / 16, 0.05, 1.0 / 20, 1.0 / 24, 1.0 / 30, 1.0 / 32, 0.025, 0.02, 1.0 / 48, 1.0 / 50, 1.0 / 64, 0.01, 0.005}
+    Dim choices() As Double = {2, 1, 0.5, 0.25, 0.2, 0.1, 1.0 / 12, 1.0 / 15, 1.0 / 16, 0.05, 1.0 / 24, 1.0 / 30, 1.0 / 40, 0.02, 1.0 / 60, 1.0 / 70, 1.0 / 80, 0.01, 1.0 / 120, 0.005}
     For Each choice As Double In choices
         If choice < current * 0.98 Then Return choice
     Next
@@ -774,11 +1068,46 @@ Sub TryAddPartsList(drawDoc As DrawingDocument, sheet As Sheet, front As Drawing
         SheetCorner(sheet, leftLimit, topLimit)
         Dim table As PartsList = sheet.PartsLists.Add(front, tg.CreatePoint2d(leftLimit, topLimit))
         QuietUpdate(drawDoc)
+        FitTableForSheet(drawDoc, sheet, tg)
+    Catch
+    End Try
+End Sub
+
+Sub FitTableForSheet(drawDoc As DrawingDocument, sheet As Sheet, tg As TransientGeometry)
+    Try
+        If sheet.PartsLists.Count = 0 Then Return
+        Dim table As PartsList = sheet.PartsLists.Item(1)
         FitPartsListColumns(table)
+        Dim descWidth As Double = DescriptionWidth(table, sheet)
+        SetDescriptionWidth(table, descWidth)
         QuietUpdate(drawDoc)
-        ShrinkWideColumns(sheet, table)
+        Dim pass As Integer = 1
+        Do While pass <= 3
+            FitPartsListColumns(table)
+            Dim box As Box2d = table.RangeBox
+            If box Is Nothing OrElse box.MinPoint Is Nothing OrElse box.MaxPoint Is Nothing Then Exit Do
+            Dim tableH As Double = box.MaxPoint.Y - box.MinPoint.Y
+            Dim tableW As Double = box.MaxPoint.X - box.MinPoint.X
+            If tableH > sheet.Height * 0.32 AndAlso tableW < sheet.Width * 0.56 Then
+                descWidth = descWidth * 1.25
+                If descWidth > sheet.Width * 0.4 Then descWidth = sheet.Width * 0.4
+                SetDescriptionWidth(table, descWidth)
+            ElseIf tableW > sheet.Width * 0.58 Then
+                descWidth = descWidth * 0.86
+                If descWidth < 8 Then descWidth = 8
+                SetDescriptionWidth(table, descWidth)
+            Else
+                Exit Do
+            End If
+            QuietUpdate(drawDoc)
+            pass = pass + 1
+        Loop
+        FitPartsListColumns(table)
+        SetDescriptionWidth(table, descWidth)
         QuietUpdate(drawDoc)
         SeatPartsList(drawDoc, sheet, table, tg)
+        FitPartsListColumns(table)
+        SetDescriptionWidth(table, descWidth)
     Catch
     End Try
 End Sub
@@ -804,44 +1133,78 @@ Sub FitPartsListColumns(table As PartsList)
         Dim chars As Integer = WidestColumnText(table, col, colIndex)
         Dim width As Double = 0
         If kind = 1 OrElse kind = 2 Then
-            width = chars * 0.16 + 0.18
-            If width < 0.9 Then width = 0.9
-            If width > 1.55 Then width = 1.55
+            width = chars * 0.19 + 0.28
+            If width < 1.05 Then width = 1.05
+            If width > 2.05 Then width = 2.05
             Try
                 col.Width = width
             Catch
             End Try
         ElseIf kind = 3 Then
-            width = chars * 0.16 + 0.22
-            If width < 1.6 Then width = 1.6
-            If width > 5.2 Then width = 5.2
+            width = chars * 0.19 + 0.32
+            If width < 2.0 Then width = 2.0
+            If width > 7.2 Then width = 7.2
             Try
                 col.Width = width
-            Catch
-            End Try
-        End If
-        colIndex = colIndex + 1
-    Loop
-    colIndex = 1
-    Do While colIndex <= table.PartsListColumns.Count
-        Dim descCol As PartsListColumn = table.PartsListColumns.Item(colIndex)
-        If ColumnKind(descCol) = 0 Then
-            Dim title As String = ""
-            Try
-                If descCol.Title IsNot Nothing Then title = descCol.Title.ToUpper()
-            Catch
-                title = ""
-            End Try
-            Dim descWidth As Double = 7.2
-            If title.Contains("DESC") Then descWidth = 10.5
-            Try
-                descCol.Width = descWidth
             Catch
             End Try
         End If
         colIndex = colIndex + 1
     Loop
 End Sub
+
+Sub SetDescriptionWidth(table As PartsList, width As Double)
+    Dim colIndex As Integer = 1
+    Do While colIndex <= table.PartsListColumns.Count
+        Dim descCol As PartsListColumn = table.PartsListColumns.Item(colIndex)
+        If ColumnKind(descCol) = 0 Then
+            Try
+                descCol.Width = width
+            Catch
+            End Try
+        End If
+        colIndex = colIndex + 1
+    Loop
+End Sub
+
+Function DescriptionWidth(table As PartsList, sheet As Sheet) As Double
+    Dim chars As Integer = 20
+    Dim colIndex As Integer = 1
+    Do While colIndex <= table.PartsListColumns.Count
+        Dim descCol As PartsListColumn = table.PartsListColumns.Item(colIndex)
+        If ColumnKind(descCol) = 0 Then
+            Dim rowIndex As Integer = 1
+            Do While rowIndex <= table.PartsListRows.Count
+                Try
+                    Dim cellText As String = table.PartsListRows.Item(rowIndex).Item(colIndex).Value
+                    Dim plain As Integer = PlainLength(cellText)
+                    Dim need As Integer = (plain + 1) \ 2
+                    If cellText IsNot Nothing AndAlso cellText.Contains(Chr(10)) Then need = LongestPiece(cellText)
+                    If need > chars Then chars = need
+                Catch
+                End Try
+                rowIndex = rowIndex + 1
+            Loop
+        End If
+        colIndex = colIndex + 1
+    Loop
+    Dim width As Double = chars * 0.21 + 0.55
+    If width < 9 Then width = 9
+    If width > sheet.Width * 0.4 Then width = sheet.Width * 0.4
+    Return width
+End Function
+
+Function PlainLength(text As String) As Integer
+    If text Is Nothing OrElse text = "" Then Return 0
+    Dim count As Integer = 0
+    Dim index As Integer = 1
+    Do While index <= text.Length
+        Dim ch As String = Mid(text, index, 1)
+        If ch <> Chr(10) AndAlso ch <> Chr(13) Then count = count + 1
+        index = index + 1
+    Loop
+    Return count
+End Function
 
 Function ColumnKind(col As PartsListColumn) As Integer
     ' PropertyTypeEnum has no parts-list members, so the heading text decides the column.
