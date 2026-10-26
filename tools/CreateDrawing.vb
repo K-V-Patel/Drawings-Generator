@@ -10,9 +10,10 @@
 ' views. Front, top, and side share one scale. The isometric view has
 ' its own scale and is moved, with the other views, into the open areas
 ' of the sheet. Overall dimensions are added on the orthographic views.
-' When the assembly has more than one part, each part gets one balloon just outside that part
-' on the isometric view. Balloons that already fall in a row or a column
-' share that line. Item numbers are not stacked in order.
+' When the assembly has more than one part, each part gets one balloon
+' just outside that part on the isometric view. A balloon stays next to
+' its own part. It is shifted only enough to keep two balloons from
+' sitting on each other, and it does not have to share a row or a column.
 '
 ' The drawing is saved as the part number .idw in the sibling Drawing
 ' folder when that folder exists, otherwise beside the model. An existing
@@ -1380,6 +1381,10 @@ Function PlaceNearBalloons(sheet As Sheet, host As DrawingView, targets As List(
     Dim occs As New List(Of ComponentOccurrence)
     Dim tipX As New List(Of Double)
     Dim tipY As New List(Of Double)
+    Dim boxL As New List(Of Double)
+    Dim boxB As New List(Of Double)
+    Dim boxR As New List(Of Double)
+    Dim boxT As New List(Of Double)
     Dim problem As String = ""
     For Each occ As ComponentOccurrence In targets
         Dim minX As Double = 0
@@ -1393,9 +1398,13 @@ Function PlaceNearBalloons(sheet As Sheet, host As DrawingView, targets As List(
             occs.Add(occ)
             tipX.Add(spot.X)
             tipY.Add(spot.Y)
+            boxL.Add(minX)
+            boxB.Add(minY)
+            boxR.Add(maxX)
+            boxT.Add(maxY)
         End If
     Next
-    AlignNearby(host, tipX, tipY)
+    SettleTips(tipX, tipY, boxL, boxB, boxR, boxT)
     KeepTipsClear(sheet, host, tipX, tipY)
     ClampTips(sheet, tipX, tipY)
     Dim index As Integer = 0
@@ -1503,7 +1512,7 @@ Function TipOutside(sheet As Sheet, host As DrawingView, minX As Double, minY As
     End If
     Dim dx As Double = px - vx
     Dim dy As Double = py - vy
-    Dim reach As Double = 0.55
+    Dim reach As Double = 0.42
     Dim tipX As Double = px
     Dim tipY As Double = py
     If Math.Abs(dx) >= Math.Abs(dy) Then
@@ -1581,6 +1590,102 @@ Function TipBeside(sheet As Sheet, host As DrawingView, edge As Point2d) As Poin
     If tipY > sheet.Height - margin Then tipY = sheet.Height - margin
     Return ThisApplication.TransientGeometry.CreatePoint2d(tipX, tipY)
 End Function
+
+Sub SettleTips(xs As List(Of Double), ys As List(Of Double), boxL As List(Of Double), boxB As List(Of Double), boxR As List(Of Double), boxT As List(Of Double))
+    If xs Is Nothing OrElse ys Is Nothing Then Return
+    Dim count As Integer = xs.Count
+    If ys.Count < count Then count = ys.Count
+    If count < 2 Then Return
+    Dim homeX As New List(Of Double)
+    Dim homeY As New List(Of Double)
+    Dim n As Integer = 0
+    Do While n < count
+        homeX.Add(xs(n))
+        homeY.Add(ys(n))
+        n = n + 1
+    Loop
+    Dim guard As Integer = 0
+    Dim dx As Double = 0
+    Dim dy As Double = 0
+    Dim ax As Double = 0
+    Dim ay As Double = 0
+    Dim near As Double = 0
+    Dim push As Double = 0
+    Dim ux As Double = 0
+    Dim uy As Double = 0
+    Do While guard < 8
+        guard = guard + 1
+        Dim moved As Boolean = False
+        Dim i As Integer = 0
+        Do While i < count
+            Dim j As Integer = i + 1
+            Do While j < count
+                dx = xs(j) - xs(i)
+                dy = ys(j) - ys(i)
+                ax = Math.Abs(dx)
+                ay = Math.Abs(dy)
+                near = ax
+                If ay > near Then near = ay
+                If near < 1.05 Then
+                    push = (1.05 - near) / 2 + 0.05
+                    If push > 0.4 Then push = 0.4
+                    ux = 0
+                    uy = 1
+                    If near > 0.05 Then
+                        ux = dx / near
+                        uy = dy / near
+                    End If
+                    xs(i) = xs(i) - ux * push
+                    ys(i) = ys(i) - uy * push
+                    xs(j) = xs(j) + ux * push
+                    ys(j) = ys(j) + uy * push
+                    moved = True
+                End If
+                j = j + 1
+            Loop
+            i = i + 1
+        Loop
+        i = 0
+        Do While i < count
+            dx = xs(i) - homeX(i)
+            dy = ys(i) - homeY(i)
+            near = Math.Abs(dx)
+            If Math.Abs(dy) > near Then near = Math.Abs(dy)
+            If near > 0.7 Then
+                push = 0.7 / near
+                xs(i) = homeX(i) + dx * push
+                ys(i) = homeY(i) + dy * push
+                moved = True
+            End If
+            If i < boxL.Count AndAlso i < boxB.Count AndAlso i < boxR.Count AndAlso i < boxT.Count Then
+                If xs(i) > boxL(i) AndAlso xs(i) < boxR(i) AndAlso ys(i) > boxB(i) AndAlso ys(i) < boxT(i) Then
+                    Dim leftD As Double = xs(i) - boxL(i)
+                    Dim rightD As Double = boxR(i) - xs(i)
+                    Dim lowD As Double = ys(i) - boxB(i)
+                    Dim highD As Double = boxT(i) - ys(i)
+                    Dim best As Double = leftD
+                    Dim which As Integer = 1
+                    If rightD < best Then
+                        best = rightD
+                        which = 2
+                    End If
+                    If lowD < best Then
+                        best = lowD
+                        which = 3
+                    End If
+                    If highD < best Then which = 4
+                    If which = 1 Then xs(i) = boxL(i) - 0.42
+                    If which = 2 Then xs(i) = boxR(i) + 0.42
+                    If which = 3 Then ys(i) = boxB(i) - 0.42
+                    If which = 4 Then ys(i) = boxT(i) + 0.42
+                    moved = True
+                End If
+            End If
+            i = i + 1
+        Loop
+        If Not moved Then Exit Do
+    Loop
+End Sub
 
 Sub AlignNearby(host As DrawingView, xs As List(Of Double), ys As List(Of Double))
     If host Is Nothing OrElse host.Position Is Nothing Then Return
@@ -1935,7 +2040,7 @@ Sub KeepTipsClear(sheet As Sheet, host As DrawingView, xs As List(Of Double), ys
             Try
                 For Each view As DrawingView In sheet.DrawingViews
                     If view IsNot Nothing AndAlso view.Position IsNot Nothing AndAlso Not SameView(view, host) Then
-                        PushTipOut(x, y, view.Position.X - view.Width / 2 - 1.6, view.Position.Y - view.Height / 2 - 1.6, view.Position.X + view.Width / 2 + 1.6, view.Position.Y + view.Height / 2 + 1.6)
+                        PushTipOut(x, y, view.Position.X - view.Width / 2 - 0.35, view.Position.Y - view.Height / 2 - 0.35, view.Position.X + view.Width / 2 + 0.35, view.Position.Y + view.Height / 2 + 0.35)
                     End If
                 Next
             Catch
