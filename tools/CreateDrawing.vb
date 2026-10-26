@@ -13,9 +13,10 @@
 ' just outside that part on the isometric view. A balloon stays next to
 ' its own part. It is shifted only enough to keep two balloons from
 ' sitting on each other, and it does not have to share a row or a column.
-' On a part, the top view is left off. Front, side, and isometric each
-' get their own scale. A long part keeps a wide band for the length. A
-' small part grows into the open sheet. A part view is dimensioned with
+' On a part, the top view is left off. Front and side share one scale.
+' The isometric view has its own scale. A long part keeps a wide band for
+' the length. A small part grows into the open sheet. A part view is
+' dimensioned with
 ' the overall size, each distinct wall thickness once, and one radius or
 ' hole size. The steps between those are left off.
 '
@@ -833,21 +834,24 @@ Sub PlaceCompactPart(drawDoc As DrawingDocument, sheet As Sheet, views As Dictio
         End If
     End If
     Dim sideLinked As Boolean = ViewIsAligned(views("side"))
-    If sideLinked Then
-        Dim sharedScale As Double = frontScale
-        If sideScale < sharedScale Then sharedScale = sideScale
-        TrySetScale(views("front"), sharedScale)
-    Else
-        TrySetScale(views("front"), frontScale)
-        TrySetScale(views("side"), sideScale)
-    End If
+    Dim orthoScale As Double = frontScale
+    If sideScale < orthoScale Then orthoScale = sideScale
+    TrySetScale(views("front"), orthoScale)
+    If (Not sideLinked) AndAlso (Not views("side") Is views("front")) Then TrySetScale(views("side"), orthoScale)
     TrySetScale(views("iso"), isoScale)
     QuietUpdate(drawDoc)
     Dim frontView As DrawingView = views("front")
     Dim sideView As DrawingView = views("side")
     Dim isoView As DrawingView = views("iso")
-    FitInside(drawDoc, frontView, (frontR - frontL) - reserveX - 0.2, (frontT - frontB) - reserveY - 0.2)
-    If Not sideView Is frontView Then FitInside(drawDoc, sideView, (sideR - sideL) - reserveX - 0.2, (sideT - sideB) - reserveY - 0.2)
+    Dim frontTight As Boolean = SlotOverflow(frontView, (frontR - frontL) - reserveX - 0.2, (frontT - frontB) - reserveY - 0.2)
+    Dim sideTight As Boolean = False
+    If Not sideView Is frontView Then sideTight = SlotOverflow(sideView, (sideR - sideL) - reserveX - 0.2, (sideT - sideB) - reserveY - 0.2)
+    If frontTight OrElse sideTight Then
+        orthoScale = NextSmallerScale(orthoScale)
+        TrySetScale(views("front"), orthoScale)
+        If (Not sideLinked) AndAlso (Not sideView Is frontView) Then TrySetScale(views("side"), orthoScale)
+        QuietUpdate(drawDoc)
+    End If
     FitInside(drawDoc, isoView, isoR - isoL - 0.5, isoT - isoB - 0.5)
     SeatForDims(frontView, tg, frontL, frontB, frontR, frontT, reserveX, reserveY)
     If Not sideView Is frontView Then SeatForDims(sideView, tg, sideL, sideB, sideR, sideT, reserveX, reserveY)
@@ -970,18 +974,11 @@ Sub PlacePartViews(drawDoc As DrawingDocument, sheet As Sheet, views As Dictiona
     Dim sIsoH As Double = (isoT - isoB - 0.8) / Math.Max(isoH, 0.1)
     If sIsoH < sIso Then sIso = sIsoH
     Dim sideLinked As Boolean = ViewIsAligned(views("side"))
-    If sideLinked Then
-        Dim sharedScale As Double = longScale
-        Dim shortScale As Double = NiceScale(sShort)
-        If shortScale < sharedScale Then sharedScale = shortScale
-        TrySetScale(views("front"), sharedScale)
-    ElseIf longIsSide Then
-        TrySetScale(views("side"), longScale)
-        TrySetScale(views("front"), NiceScale(sShort))
-    Else
-        TrySetScale(views("front"), longScale)
-        TrySetScale(views("side"), NiceScale(sShort))
-    End If
+    Dim orthoScale As Double = longScale
+    Dim shortScale As Double = NiceScale(sShort)
+    If shortScale < orthoScale Then orthoScale = shortScale
+    TrySetScale(views("front"), orthoScale)
+    If (Not sideLinked) AndAlso (Not views("side") Is views("front")) Then TrySetScale(views("side"), orthoScale)
     TrySetScale(views("iso"), NiceScale(sIso))
     QuietUpdate(drawDoc)
     Dim frontView As DrawingView = views("front")
@@ -991,12 +988,29 @@ Sub PlacePartViews(drawDoc As DrawingDocument, sheet As Sheet, views As Dictiona
     Dim longBoxH As Double = longT - longB - reserveY - 0.3
     If longBoxW < 1 Then longBoxW = 1
     If longBoxH < 1 Then longBoxH = 1
+    Dim frontBoxW As Double = shortBoxW
+    Dim frontBoxH As Double = shortBoxH
+    Dim sideBoxW As Double = longBoxW
+    Dim sideBoxH As Double = longBoxH
     If longIsSide Then
-        FitInside(drawDoc, sideView, longBoxW, longBoxH)
-        FitInside(drawDoc, frontView, shortBoxW, shortBoxH)
+        frontBoxW = shortBoxW
+        frontBoxH = shortBoxH
+        sideBoxW = longBoxW
+        sideBoxH = longBoxH
     Else
-        FitInside(drawDoc, frontView, longBoxW, longBoxH)
-        FitInside(drawDoc, sideView, shortBoxW, shortBoxH)
+        frontBoxW = longBoxW
+        frontBoxH = longBoxH
+        sideBoxW = shortBoxW
+        sideBoxH = shortBoxH
+    End If
+    Dim frontTight As Boolean = SlotOverflow(frontView, frontBoxW, frontBoxH)
+    Dim sideTight As Boolean = False
+    If Not sideView Is frontView Then sideTight = SlotOverflow(sideView, sideBoxW, sideBoxH)
+    If frontTight OrElse sideTight Then
+        orthoScale = NextSmallerScale(orthoScale)
+        TrySetScale(views("front"), orthoScale)
+        If (Not sideLinked) AndAlso (Not sideView Is frontView) Then TrySetScale(views("side"), orthoScale)
+        QuietUpdate(drawDoc)
     End If
     FitInside(drawDoc, isoView, isoR - isoL - 0.6, isoT - isoB - 0.6)
     If longIsSide Then
