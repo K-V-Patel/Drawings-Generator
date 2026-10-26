@@ -767,11 +767,11 @@ Sub PlaceCompactPart(drawDoc As DrawingDocument, sheet As Sheet, views As Dictio
             Dim sBot As Double = boxW / Math.Max(faceW, 0.1)
             Dim sBotH As Double = (botH - reserveY) / Math.Max(faceH, 0.1)
             If sBotH < sBot Then sBot = sBotH
-            Dim sTop As Double = boxW / Math.Max(edgeW, 0.1)
-            Dim sTopH As Double = (topH - reserveY) / Math.Max(edgeH, 0.1)
-            If sTopH < sTop Then sTop = sTopH
+            Dim upperFit As Double = boxW / Math.Max(edgeW, 0.1)
+            Dim upperFitH As Double = (topH - reserveY) / Math.Max(edgeH, 0.1)
+            If upperFitH < upperFit Then upperFit = upperFitH
             Dim worst As Double = sBot
-            If sTop < worst Then worst = sTop
+            If upperFit < worst Then worst = upperFit
             If worst > bestWorst Then
                 bestWorst = worst
                 bestFrac = frac
