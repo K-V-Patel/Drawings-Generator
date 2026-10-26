@@ -3,17 +3,19 @@
 '
 ' Creates a drawing from TemplateName, so the border, title block, and
 ' dimension style are the Inventor template. The front view follows the
-' model ViewCube. Top and side are projected from that front view so they
-' stay aligned until the sheet is filled. The parts list sits on the
-' top-left corner. Its columns follow that assembly's text, and the
-' description column grows or shrinks so the table leaves room for the
-' views. Front, top, and side share one scale. The isometric view has
-' its own scale and is moved, with the other views, into the open areas
+' model ViewCube. On an assembly, top and side are projected from that
+' front view and share one scale. The parts list sits on the top-left
+' corner. Its columns follow that assembly's text, and the description
+' column grows or shrinks so the table leaves room for the views. The
+' isometric view has its own scale. Views are moved into the open areas
 ' of the sheet. Overall dimensions are added on the orthographic views.
 ' When the assembly has more than one part, each part gets one balloon
 ' just outside that part on the isometric view. A balloon stays next to
 ' its own part. It is shifted only enough to keep two balloons from
 ' sitting on each other, and it does not have to share a row or a column.
+' On a part, the top view is left off. Front, side, and isometric each
+' get their own scale, sized to the open sheet, and the front and side
+' views are dimensioned from the profile edges as well as the overall size.
 '
 ' The drawing is saved as the part number .idw in the sibling Drawing
 ' folder when that folder exists, otherwise beside the model. An existing
@@ -61,6 +63,7 @@ Sub Main()
         Dim sheet As Sheet = drawDoc.ActiveSheet
         Dim tg As TransientGeometry = app.TransientGeometry
         Dim style As DrawingViewStyleEnum = DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle
+        Dim assembly As Boolean = model.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject
         Dim front As DrawingView = sheet.DrawingViews.AddBaseView( _
             model, tg.CreatePoint2d(sheet.Width * 0.38, sheet.Height * 0.42), _
             0.1, ViewOrientationTypeEnum.kFrontViewOrientation, style)
@@ -71,33 +74,48 @@ Sub Main()
 
         Dim views As New Dictionary(Of String, DrawingView)
         views("front") = front
-        views("top") = AddChildView(sheet, front, model, tg, style, True)
-        views("side") = AddChildView(sheet, front, model, tg, style, False)
+        If assembly Then
+            views("top") = AddChildView(sheet, front, model, tg, style, True)
+            views("side") = AddChildView(sheet, front, model, tg, style, False)
+        Else
+            Dim sideView As DrawingView = AddPartSide(sheet, model, tg, style)
+            If sideView Is Nothing Then sideView = AddChildView(sheet, front, model, tg, style, False)
+            views("side") = sideView
+        End If
         Dim isoView As DrawingView = AddIsoView(sheet, model, tg, style, front)
         views("iso") = isoView
         If Not isoView Is front Then ApplyHomeCamera(isoView, model)
         QuietUpdate(drawDoc)
-        If model.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then
+        If assembly Then
             ShowAssemblyParts(sheet, views)
             TryAddPartsList(drawDoc, sheet, views("front"), tg)
         End If
         QuietUpdate(drawDoc)
         ShrinkToSheet(drawDoc, sheet, views, tg, model)
         NameView(views("front"), "FRONT")
-        NameView(views("top"), "TOP")
+        If views.ContainsKey("top") Then NameView(views("top"), "TOP")
         NameView(views("side"), "SIDE")
         NameView(views("iso"), "ISOMETRIC")
 
-        TryAddOverall(sheet, views("front"), True, tg)
-        TryAddOverall(sheet, views("front"), False, tg)
-        TryAddOverall(sheet, views("side"), True, tg)
-        TryAddOverall(sheet, views("top"), False, tg)
+        If assembly Then
+            TryAddOverall(sheet, views("front"), True, tg)
+            TryAddOverall(sheet, views("front"), False, tg)
+            TryAddOverall(sheet, views("side"), True, tg)
+            If views.ContainsKey("top") Then TryAddOverall(sheet, views("top"), False, tg)
+        Else
+            AddPartDimensions(sheet, views("front"), tg)
+            If Not views("side") Is views("front") Then AddPartDimensions(sheet, views("side"), tg)
+        End If
 
         Dim balloonNote As String = ""
-        If model.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then
+        If assembly Then
             balloonNote = AddItemBalloons(sheet, model, views, tg)
         End If
         QuietUpdate(drawDoc)
+        If Not assembly Then
+            PlaceLabelAbove(views("front"), tg)
+            If Not views("side") Is views("front") Then PlaceLabelAbove(views("side"), tg)
+        End If
 
         Dim idwPath As String = ""
         Try
@@ -222,6 +240,20 @@ Function AddChildView(sheet As Sheet, front As DrawingView, model As Document, t
     End Try
 End Function
 
+Function AddPartSide(sheet As Sheet, model As Document, tg As TransientGeometry, style As DrawingViewStyleEnum) As DrawingView
+    ' A projected side keeps the front view's scale. A part side is its own
+    ' base view so the short end view can grow without stretching the length.
+    Dim point As Point2d = tg.CreatePoint2d(sheet.Width * 0.46, sheet.Height * 0.24)
+    Try
+        Dim sideView As DrawingView = sheet.DrawingViews.AddBaseView( _
+            model, point, 0.02, ViewOrientationTypeEnum.kRightViewOrientation, style)
+        ApplyFacing(sideView, model, "AppRightViewCmd")
+        Return sideView
+    Catch
+        Return Nothing
+    End Try
+End Function
+
 Function AddIsoView(sheet As Sheet, model As Document, tg As TransientGeometry, style As DrawingViewStyleEnum, front As DrawingView) As DrawingView
     Dim point As Point2d = tg.CreatePoint2d(sheet.Width * 0.75, sheet.Height * 0.68)
     Dim childScale As Double = 0.02
@@ -342,16 +374,22 @@ Sub ShrinkToSheet(drawDoc As DrawingDocument, sheet As Sheet, views As Dictionar
     QuietUpdate(drawDoc)
     Dim frontW As Double = SafeSpan(views("front"), model, True)
     Dim frontH As Double = SafeSpan(views("front"), model, False)
-    Dim topW As Double = SafeSpan(views("top"), model, True)
-    Dim topH As Double = SafeSpan(views("top"), model, False)
+    Dim topW As Double = 0
+    Dim topH As Double = 0
+    If views.ContainsKey("top") Then
+        topW = SafeSpan(views("top"), model, True)
+        topH = SafeSpan(views("top"), model, False)
+    End If
     Dim sideW As Double = SafeSpan(views("side"), model, True)
     Dim sideH As Double = SafeSpan(views("side"), model, False)
     Dim isoW As Double = SafeSpan(views("iso"), model, True)
     Dim isoH As Double = SafeSpan(views("iso"), model, False)
-    If sheet.PartsLists.Count > 0 Then
+    If sheet.PartsLists.Count > 0 AndAlso views.ContainsKey("top") Then
         PlaceAroundList(drawDoc, sheet, views, tg, frontW, frontH, topW, topH, sideW, sideH, isoW, isoH)
-    Else
+    ElseIf views.ContainsKey("top") Then
         PlaceWithoutList(drawDoc, sheet, views, tg, frontW, frontH, topW, topH, sideW, sideH, isoW, isoH)
+    Else
+        PlacePartViews(drawDoc, sheet, views, tg, frontW, frontH, sideW, sideH, isoW, isoH)
     End If
     QuietUpdate(drawDoc)
     NudgeEachView(sheet, views, tg)
@@ -590,6 +628,173 @@ Sub PlaceWithoutList(drawDoc As DrawingDocument, sheet As Sheet, views As Dictio
     CenterInSlot(views("iso"), tg, split + 0.5, isoFloor, rightEdge, topEdge)
 End Sub
 
+Sub PlacePartViews(drawDoc As DrawingDocument, sheet As Sheet, views As Dictionary(Of String, DrawingView), tg As TransientGeometry, frontW As Double, frontH As Double, sideW As Double, sideH As Double, isoW As Double, isoH As Double)
+    ' Three views. The long ortho view takes a full-width band. The short
+    ' one, usually the end view, takes the larger upper slot at its own scale.
+    Dim leftLimit As Double = 0
+    Dim bottomLimit As Double = 0
+    Dim rightLimit As Double = 0
+    Dim topLimit As Double = 0
+    BorderLimits(sheet, leftLimit, bottomLimit, rightLimit, topLimit)
+    Dim pad As Double = 0.5
+    Dim leftEdge As Double = leftLimit + pad
+    Dim bottomEdge As Double = bottomLimit + pad
+    Dim rightEdge As Double = rightLimit - pad
+    Dim topEdge As Double = topLimit - pad
+    Dim listL As Double = 0
+    Dim listB As Double = 0
+    Dim listR As Double = 0
+    Dim listT As Double = 0
+    Dim hasList As Boolean = False
+    Dim titleL As Double = 0
+    Dim titleB As Double = 0
+    Dim titleR As Double = 0
+    Dim titleT As Double = 0
+    Dim hasTitle As Boolean = False
+    ReadOccupied(sheet, listL, listB, listR, listT, hasList, titleL, titleB, titleR, titleT, hasTitle)
+    Dim floorY As Double = bottomEdge
+    If hasTitle AndAlso titleT + 0.5 > floorY Then floorY = titleT + 0.5
+    Dim innerW As Double = rightEdge - leftEdge
+    Dim usableH As Double = topEdge - floorY
+    If innerW < 8 Then innerW = 8
+    If usableH < 8 Then usableH = 8
+    Dim reserveX As Double = 3.4
+    Dim reserveY As Double = 3.4
+    Dim gap As Double = 0.75
+    Dim longIsSide As Boolean = sideW >= frontW
+    Dim longW As Double = frontW
+    Dim longH As Double = frontH
+    Dim shortW As Double = sideW
+    Dim shortH As Double = sideH
+    If longIsSide Then
+        longW = sideW
+        longH = sideH
+        shortW = frontW
+        shortH = frontH
+    End If
+    Dim maxBand As Double = usableH * 0.38
+    If maxBand < reserveY + 2.4 Then maxBand = reserveY + 2.4
+    If maxBand > usableH - 8 Then maxBand = usableH - 8
+    If maxBand < 4 Then maxBand = 4
+    Dim sLong As Double = (innerW - reserveX - 0.8) / Math.Max(longW, 0.1)
+    Dim sLongLimit As Double = (maxBand - reserveY - 0.4) / Math.Max(longH, 0.1)
+    If sLongLimit < sLong Then sLong = sLongLimit
+    Dim longScale As Double = NiceScale(sLong)
+    Dim bandH As Double = longScale * longH + reserveY + 0.55
+    If bandH > maxBand Then bandH = maxBand
+    If bandH < reserveY + 1.6 Then bandH = reserveY + 1.6
+    Dim upperH As Double = usableH - bandH - gap
+    If upperH < 7 Then
+        upperH = 7
+        bandH = usableH - upperH - gap
+        If bandH < 4 Then bandH = 4
+    End If
+    Dim splitX As Double = leftEdge + innerW * 0.6
+    Dim upperBottom As Double = floorY + bandH + gap
+    Dim longL As Double = leftEdge
+    Dim longB As Double = floorY
+    Dim longR As Double = rightEdge
+    Dim longT As Double = floorY + bandH
+    Dim shortL As Double = leftEdge
+    Dim shortB As Double = upperBottom
+    Dim shortR As Double = splitX - 0.25
+    Dim shortT As Double = topEdge
+    Dim isoL As Double = splitX + 0.35
+    Dim isoB As Double = upperBottom
+    Dim isoR As Double = rightEdge
+    Dim isoT As Double = topEdge
+    Dim shortBoxW As Double = (shortR - shortL) - reserveX - 0.45
+    Dim shortBoxH As Double = (shortT - shortB) - reserveY - 0.4
+    If shortBoxW < 1 Then shortBoxW = 1
+    If shortBoxH < 1 Then shortBoxH = 1
+    Dim sShort As Double = shortBoxW / Math.Max(shortW, 0.1)
+    Dim sShortH As Double = shortBoxH / Math.Max(shortH, 0.1)
+    If sShortH < sShort Then sShort = sShortH
+    Dim sIso As Double = (isoR - isoL - 0.8) / Math.Max(isoW, 0.1)
+    Dim sIsoH As Double = (isoT - isoB - 0.8) / Math.Max(isoH, 0.1)
+    If sIsoH < sIso Then sIso = sIsoH
+    Dim sideLinked As Boolean = ViewIsAligned(views("side"))
+    If sideLinked Then
+        Dim sharedScale As Double = longScale
+        Dim shortScale As Double = NiceScale(sShort)
+        If shortScale < sharedScale Then sharedScale = shortScale
+        TrySetScale(views("front"), sharedScale)
+    ElseIf longIsSide Then
+        TrySetScale(views("side"), longScale)
+        TrySetScale(views("front"), NiceScale(sShort))
+    Else
+        TrySetScale(views("front"), longScale)
+        TrySetScale(views("side"), NiceScale(sShort))
+    End If
+    TrySetScale(views("iso"), NiceScale(sIso))
+    QuietUpdate(drawDoc)
+    Dim frontView As DrawingView = views("front")
+    Dim sideView As DrawingView = views("side")
+    Dim isoView As DrawingView = views("iso")
+    Dim longBoxW As Double = longR - longL - reserveX - 0.4
+    Dim longBoxH As Double = longT - longB - reserveY - 0.3
+    If longBoxW < 1 Then longBoxW = 1
+    If longBoxH < 1 Then longBoxH = 1
+    If longIsSide Then
+        FitInside(drawDoc, sideView, longBoxW, longBoxH)
+        FitInside(drawDoc, frontView, shortBoxW, shortBoxH)
+    Else
+        FitInside(drawDoc, frontView, longBoxW, longBoxH)
+        FitInside(drawDoc, sideView, shortBoxW, shortBoxH)
+    End If
+    FitInside(drawDoc, isoView, isoR - isoL - 0.6, isoT - isoB - 0.6)
+    If longIsSide Then
+        If Not sideView Is frontView Then SeatForDims(sideView, tg, longL, longB, longR, longT, reserveX, reserveY)
+        SeatForDims(frontView, tg, shortL, shortB, shortR, shortT, reserveX, reserveY)
+    Else
+        SeatForDims(frontView, tg, longL, longB, longR, longT, reserveX, reserveY)
+        If Not sideView Is frontView Then SeatForDims(sideView, tg, shortL, shortB, shortR, shortT, reserveX, reserveY)
+    End If
+    CenterInSlot(isoView, tg, isoL, isoB, isoR, isoT)
+End Sub
+
+Function ViewIsAligned(view As DrawingView) As Boolean
+    If view Is Nothing Then Return False
+    Try
+        Return view.Aligned
+    Catch
+        Return False
+    End Try
+End Function
+
+Sub FitInside(drawDoc As DrawingDocument, view As DrawingView, boxW As Double, boxH As Double)
+    If view Is Nothing Then Return
+    If ViewIsAligned(view) Then Return
+    If Not SlotOverflow(view, boxW, boxH) Then Return
+    Dim smaller As Double = 0.01
+    Try
+        smaller = NextSmallerScale(view.Scale)
+    Catch
+        smaller = 0.01
+    End Try
+    TrySetScale(view, smaller)
+    QuietUpdate(drawDoc)
+End Sub
+
+Sub SeatForDims(view As DrawingView, tg As TransientGeometry, slotL As Double, slotB As Double, slotR As Double, slotT As Double, reserveX As Double, reserveY As Double)
+    If view Is Nothing OrElse view.Position Is Nothing Then Return
+    Dim halfW As Double = 1
+    Dim halfH As Double = 1
+    Try
+        halfW = view.Width / 2
+        halfH = view.Height / 2
+    Catch
+        Return
+    End Try
+    Dim x As Double = slotL + reserveX + halfW
+    Dim y As Double = slotB + reserveY + halfH
+    If x + halfW > slotR - 0.25 Then x = slotR - 0.25 - halfW
+    If y + halfH > slotT - 0.25 Then y = slotT - 0.25 - halfH
+    If x - halfW < slotL + 0.2 Then x = slotL + 0.2 + halfW
+    If y - halfH < slotB + 0.2 Then y = slotB + 0.2 + halfH
+    TryMove(view, tg.CreatePoint2d(x, y))
+End Sub
+
 Sub NudgeEachView(sheet As Sheet, views As Dictionary(Of String, DrawingView), tg As TransientGeometry)
     Dim listL As Double = 0
     Dim listB As Double = 0
@@ -604,9 +809,9 @@ Sub NudgeEachView(sheet As Sheet, views As Dictionary(Of String, DrawingView), t
     ReadOccupied(sheet, listL, listB, listR, listT, hasList, titleL, titleB, titleR, titleT, hasTitle)
     Dim names As New List(Of String)
     names.Add("front")
-    names.Add("top")
-    names.Add("side")
-    names.Add("iso")
+    If views.ContainsKey("top") Then names.Add("top")
+    If views.ContainsKey("side") Then names.Add("side")
+    If views.ContainsKey("iso") Then names.Add("iso")
     Dim index As Integer = 0
     Do While index < names.Count
         Dim sheetView As DrawingView = views(names(index))
@@ -1148,6 +1353,321 @@ Sub TryAddOverall(sheet As Sheet, view As DrawingView, horizontal As Boolean, tg
     Catch
     End Try
 End Sub
+
+Sub PlaceLabelAbove(view As DrawingView, tg As TransientGeometry)
+    If view Is Nothing OrElse view.Position Is Nothing Then Return
+    Try
+        Dim labelY As Double = view.Position.Y + view.Height / 2 + 0.85
+        view.Label.Position = tg.CreatePoint2d(view.Position.X, labelY)
+    Catch
+    End Try
+End Sub
+
+Sub AddPartDimensions(sheet As Sheet, view As DrawingView, tg As TransientGeometry)
+    If view Is Nothing Then Return
+    Try
+        Dim curves As New List(Of DrawingCurve)
+        Dim xs As New List(Of Double)
+        Dim xOwners As New List(Of Integer)
+        Dim xKinds As New List(Of Integer)
+        Dim ys As New List(Of Double)
+        Dim yOwners As New List(Of Integer)
+        Dim yKinds As New List(Of Integer)
+        For Each curve As DrawingCurve In view.DrawingCurves
+            Dim curveIndex As Integer = curves.Count
+            curves.Add(curve)
+            NoteCurveStations(curve, curveIndex, xs, xOwners, xKinds, ys, yOwners, yKinds)
+        Next
+        DimensionDirection(sheet, view, tg, curves, xs, xOwners, xKinds, True)
+        DimensionDirection(sheet, view, tg, curves, ys, yOwners, yKinds, False)
+        AddRoundSizes(sheet, view, tg)
+    Catch
+    End Try
+End Sub
+
+Sub NoteCurveStations(curve As DrawingCurve, curveIndex As Integer, xs As List(Of Double), xOwners As List(Of Integer), xKinds As List(Of Integer), ys As List(Of Double), yOwners As List(Of Integer), yKinds As List(Of Integer))
+    Dim typeName As String = ""
+    Try
+        typeName = curve.CurveType.ToString()
+    Catch
+    End Try
+    If typeName.Contains("Circle") AndAlso Not typeName.Contains("Arc") Then
+        Try
+            Dim centerPt As Point2d = curve.CenterPoint
+            If centerPt IsNot Nothing Then
+                KeepStation(centerPt.X, curveIndex, 3, xs, xOwners, xKinds)
+                KeepStation(centerPt.Y, curveIndex, 3, ys, yOwners, yKinds)
+            End If
+        Catch
+        End Try
+        Return
+    End If
+    NoteOneEnd(curve, curveIndex, 0, xs, xOwners, xKinds, ys, yOwners, yKinds)
+    NoteOneEnd(curve, curveIndex, 1, xs, xOwners, xKinds, ys, yOwners, yKinds)
+    NoteOneEnd(curve, curveIndex, 2, xs, xOwners, xKinds, ys, yOwners, yKinds)
+End Sub
+
+Sub NoteOneEnd(curve As DrawingCurve, curveIndex As Integer, kind As Integer, xs As List(Of Double), xOwners As List(Of Integer), xKinds As List(Of Integer), ys As List(Of Double), yOwners As List(Of Integer), yKinds As List(Of Integer))
+    Dim pt As Point2d = Nothing
+    Try
+        If kind = 0 Then pt = curve.StartPoint
+        If kind = 1 Then pt = curve.EndPoint
+        If kind = 2 Then pt = curve.MidPoint
+    Catch
+        pt = Nothing
+    End Try
+    If pt Is Nothing Then Return
+    KeepStation(pt.X, curveIndex, kind, xs, xOwners, xKinds)
+    KeepStation(pt.Y, curveIndex, kind, ys, yOwners, yKinds)
+End Sub
+
+Sub KeepStation(value As Double, curveIndex As Integer, kind As Integer, values As List(Of Double), owners As List(Of Integer), kinds As List(Of Integer))
+    Dim i As Integer = 0
+    Do While i < values.Count
+        Dim delta As Double = values(i) - value
+        If delta < 0 Then delta = -delta
+        If delta < 0.045 Then Return
+        i = i + 1
+    Loop
+    values.Add(value)
+    owners.Add(curveIndex)
+    kinds.Add(kind)
+End Sub
+
+Sub OrderStations(values As List(Of Double), owners As List(Of Integer), kinds As List(Of Integer))
+    Dim i As Integer = 1
+    Do While i < values.Count
+        Dim j As Integer = i
+        Do While j > 0
+            If values(j) >= values(j - 1) Then Exit Do
+            Dim swapValue As Double = values(j)
+            values(j) = values(j - 1)
+            values(j - 1) = swapValue
+            Dim swapOwner As Integer = owners(j)
+            owners(j) = owners(j - 1)
+            owners(j - 1) = swapOwner
+            Dim swapKind As Integer = kinds(j)
+            kinds(j) = kinds(j - 1)
+            kinds(j - 1) = swapKind
+            j = j - 1
+        Loop
+        i = i + 1
+    Loop
+End Sub
+
+Function PickStations(values As List(Of Double)) As List(Of Integer)
+    Dim picked As New List(Of Integer)
+    If values.Count = 0 Then Return picked
+    picked.Add(0)
+    Dim lastValue As Double = values(0)
+    Dim i As Integer = 1
+    Do While i < values.Count
+        Dim gapHere As Double = values(i) - lastValue
+        If gapHere >= 0.16 OrElse i = values.Count - 1 Then
+            picked.Add(i)
+            lastValue = values(i)
+        End If
+        i = i + 1
+    Loop
+    If picked(picked.Count - 1) <> values.Count - 1 Then picked.Add(values.Count - 1)
+    Dim guard As Integer = 0
+    Do While picked.Count > 8 AndAlso guard < 40
+        If picked.Count < 3 Then Exit Do
+        Dim smallest As Double = 1.0E+30
+        Dim dropAt As Integer = 1
+        Dim p As Integer = 1
+        Do While p < picked.Count - 1
+            Dim gapLeft As Double = values(picked(p)) - values(picked(p - 1))
+            Dim gapNext As Double = values(picked(p + 1)) - values(picked(p))
+            Dim nearGap As Double = gapLeft
+            If gapNext < nearGap Then nearGap = gapNext
+            If nearGap < smallest Then
+                smallest = nearGap
+                dropAt = p
+            End If
+            p = p + 1
+        Loop
+        picked.RemoveAt(dropAt)
+        guard = guard + 1
+    Loop
+    Return picked
+End Function
+
+Function OpenLevel(usedL As List(Of Double), usedR As List(Of Double), usedLevel As List(Of Integer), leftEdge As Double, rightEdge As Double) As Integer
+    Dim levelIndex As Integer = 0
+    Do While levelIndex < 4
+        Dim blocked As Boolean = False
+        Dim i As Integer = 0
+        Do While i < usedL.Count
+            If usedLevel(i) = levelIndex Then
+                If rightEdge > usedL(i) - 0.2 AndAlso leftEdge < usedR(i) + 0.2 Then
+                    blocked = True
+                    Exit Do
+                End If
+            End If
+            i = i + 1
+        Loop
+        If Not blocked Then Return levelIndex
+        levelIndex = levelIndex + 1
+    Loop
+    Return 3
+End Function
+
+Sub DimensionDirection(sheet As Sheet, view As DrawingView, tg As TransientGeometry, curves As List(Of DrawingCurve), values As List(Of Double), owners As List(Of Integer), kinds As List(Of Integer), horizontal As Boolean)
+    Try
+        If values.Count < 2 Then Return
+        OrderStations(values, owners, kinds)
+        Dim picked As List(Of Integer) = PickStations(values)
+        If picked.Count < 2 Then Return
+        Dim usedL As New List(Of Double)
+        Dim usedR As New List(Of Double)
+        Dim usedLevel As New List(Of Integer)
+        Dim seg As Integer = 0
+        Do While seg < picked.Count - 1
+            PlaceStationDim(sheet, view, tg, curves, values, owners, kinds, picked(seg), picked(seg + 1), usedL, usedR, usedLevel, horizontal)
+            seg = seg + 1
+        Loop
+        If picked.Count > 2 Then
+            PlaceStationDim(sheet, view, tg, curves, values, owners, kinds, picked(0), picked(picked.Count - 1), usedL, usedR, usedLevel, horizontal)
+        End If
+    Catch
+    End Try
+End Sub
+
+Sub PlaceStationDim(sheet As Sheet, view As DrawingView, tg As TransientGeometry, curves As List(Of DrawingCurve), values As List(Of Double), owners As List(Of Integer), kinds As List(Of Integer), indexA As Integer, indexB As Integer, usedL As List(Of Double), usedR As List(Of Double), usedLevel As List(Of Integer), horizontal As Boolean)
+    Try
+        If view Is Nothing OrElse view.Position Is Nothing Then Return
+        If indexA < 0 OrElse indexB < 0 OrElse indexA >= values.Count OrElse indexB >= values.Count Then Return
+        If owners(indexA) = owners(indexB) AndAlso kinds(indexA) = kinds(indexB) Then Return
+        Dim valueA As Double = values(indexA)
+        Dim valueB As Double = values(indexB)
+        Dim span As Double = valueB - valueA
+        If span < 0 Then span = -span
+        If span < 0.1 Then Return
+        If owners(indexA) < 0 OrElse owners(indexA) >= curves.Count Then Return
+        If owners(indexB) < 0 OrElse owners(indexB) >= curves.Count Then Return
+        Dim intentA As GeometryIntent = CurveIntent(sheet, curves(owners(indexA)), kinds(indexA))
+        Dim intentB As GeometryIntent = CurveIntent(sheet, curves(owners(indexB)), kinds(indexB))
+        If intentA Is Nothing OrElse intentB Is Nothing Then Return
+        Dim leftEdge As Double = valueA
+        Dim rightEdge As Double = valueB
+        If rightEdge < leftEdge Then
+            leftEdge = valueB
+            rightEdge = valueA
+        End If
+        Dim midEdge As Double = (leftEdge + rightEdge) / 2
+        If rightEdge - leftEdge < 1.5 Then
+            leftEdge = midEdge - 0.75
+            rightEdge = midEdge + 0.75
+        End If
+        Dim levelIndex As Integer = OpenLevel(usedL, usedR, usedLevel, leftEdge, rightEdge)
+        usedL.Add(leftEdge)
+        usedR.Add(rightEdge)
+        usedLevel.Add(levelIndex)
+        Dim offset As Double = 1.15 + levelIndex * 0.72
+        Dim textPoint As Point2d
+        Dim dimKind As DimensionTypeEnum
+        If horizontal Then
+            textPoint = tg.CreatePoint2d(midEdge, view.Position.Y - view.Height / 2 - offset)
+            dimKind = DimensionTypeEnum.kHorizontalDimensionType
+        Else
+            textPoint = tg.CreatePoint2d(view.Position.X - view.Width / 2 - offset, midEdge)
+            dimKind = DimensionTypeEnum.kVerticalDimensionType
+        End If
+        sheet.DrawingDimensions.GeneralDimensions.AddLinear(textPoint, intentA, intentB, dimKind)
+    Catch
+    End Try
+End Sub
+
+Function CurveIntent(sheet As Sheet, curve As DrawingCurve, kind As Integer) As GeometryIntent
+    Dim intent As GeometryIntent = Nothing
+    Try
+        Dim which As PointIntentEnum = PointIntentEnum.kStartPointIntent
+        If kind = 1 Then which = PointIntentEnum.kEndPointIntent
+        If kind = 2 Then which = PointIntentEnum.kMidPointIntent
+        If kind = 3 Then which = PointIntentEnum.kCenterPointIntent
+        intent = sheet.CreateGeometryIntent(curve, which)
+    Catch
+        intent = Nothing
+    End Try
+    If intent IsNot Nothing Then Return intent
+    Try
+        Return sheet.CreateGeometryIntent(curve)
+    Catch
+        Return Nothing
+    End Try
+End Function
+
+Sub AddRoundSizes(sheet As Sheet, view As DrawingView, tg As TransientGeometry)
+    If view Is Nothing OrElse view.Position Is Nothing Then Return
+    Dim count As Integer = 0
+    Try
+        For Each curve As DrawingCurve In view.DrawingCurves
+            If count >= 6 Then Exit For
+            Dim typeName As String = ""
+            Try
+                typeName = curve.CurveType.ToString()
+            Catch
+            End Try
+            Dim radius As Double = CurveRadius(curve)
+            If radius < 0.18 Then Continue For
+            Dim centerPt As Point2d = Nothing
+            Try
+                centerPt = curve.CenterPoint
+            Catch
+                centerPt = Nothing
+            End Try
+            If centerPt Is Nothing Then Continue For
+            Dim textPoint As Point2d = tg.CreatePoint2d(centerPt.X + radius + 1.05, centerPt.Y + 0.35 + count * 0.55)
+            Dim intent As GeometryIntent = Nothing
+            Try
+                intent = sheet.CreateGeometryIntent(curve)
+            Catch
+                intent = Nothing
+            End Try
+            If intent Is Nothing Then Continue For
+            If typeName.Contains("Circle") AndAlso Not typeName.Contains("Arc") Then
+                Try
+                    sheet.DrawingDimensions.GeneralDimensions.AddDiameter(textPoint, intent)
+                    count = count + 1
+                Catch
+                End Try
+            ElseIf typeName.Contains("Arc") Then
+                If radius > view.Width * 0.45 AndAlso radius > view.Height * 0.45 Then Continue For
+                Try
+                    sheet.DrawingDimensions.GeneralDimensions.AddRadius(textPoint, intent)
+                    count = count + 1
+                Catch
+                End Try
+            End If
+        Next
+    Catch
+    End Try
+End Sub
+
+Function CurveRadius(curve As DrawingCurve) As Double
+    Try
+        Dim centerPt As Point2d = curve.CenterPoint
+        If centerPt Is Nothing Then Return 0
+        Dim rimPoint As Point2d = Nothing
+        Try
+            rimPoint = curve.StartPoint
+        Catch
+            rimPoint = Nothing
+        End Try
+        If rimPoint Is Nothing Then
+            Try
+                rimPoint = curve.MidPoint
+            Catch
+                rimPoint = Nothing
+            End Try
+        End If
+        If rimPoint Is Nothing Then Return 0
+        Return centerPt.DistanceTo(rimPoint)
+    Catch
+        Return 0
+    End Try
+End Function
 
 Sub QuietUpdate(drawDoc As DrawingDocument)
     Try
@@ -2712,6 +3232,22 @@ Function WriteCurves(model As Document, views As Dictionary(Of String, DrawingVi
     Next
     Dim bom As String = ""
     If fileKind = "iam" Then bom = BomJson(model)
+    Dim selectedBody As New StringBuilder()
+    Dim roleOrder As New List(Of String)
+    roleOrder.Add("front")
+    roleOrder.Add("top")
+    roleOrder.Add("side")
+    roleOrder.Add("iso")
+    Dim roleIndex As Integer = 0
+    Dim roleFirst As Boolean = True
+    Do While roleIndex < roleOrder.Count
+        If views.ContainsKey(roleOrder(roleIndex)) Then
+            If Not roleFirst Then selectedBody.Append(",")
+            roleFirst = False
+            selectedBody.Append(Quoted(roleOrder(roleIndex)))
+        End If
+        roleIndex = roleIndex + 1
+    Loop
     Dim json As New StringBuilder()
     json.Append("{")
     json.Append(Quoted("schema"))
@@ -2728,13 +3264,7 @@ Function WriteCurves(model As Document, views As Dictionary(Of String, DrawingVi
     json.Append(",")
     json.Append(Quoted("selectedViews"))
     json.Append(":[")
-    json.Append(Quoted("front"))
-    json.Append(",")
-    json.Append(Quoted("top"))
-    json.Append(",")
-    json.Append(Quoted("side"))
-    json.Append(",")
-    json.Append(Quoted("iso"))
+    json.Append(selectedBody.ToString())
     json.Append("],")
     json.Append(Quoted("properties"))
     json.Append(":{")
