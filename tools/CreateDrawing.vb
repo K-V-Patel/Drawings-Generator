@@ -23,6 +23,10 @@
 '
 ' The drawing stays open in Inventor. It is not saved automatically.
 ' No .drawgen.json is written.
+' Standard1.idw, when it is in the template folder, supplies the title
+' block so the description fits and the project series keeps that font.
+' Without that file, the description is scaled into its box and the
+' series font uses SeriesFontIn.
 '
 ' iLogic misreads a quote typed inside a string, so every quote is Chr(34).
 
@@ -32,6 +36,8 @@ Sub Main()
     ' Drawing template. Use a file name from the Inventor template folder,
     ' or a full path. Standard.idw is the usual shop template.
     Dim TemplateName As String = "Standard.idw"
+    ' Project series font, in inches, when Standard1.idw is not found.
+    Dim SeriesFontIn As Double = 0.1
 
     Dim model As Document = ThisDoc.Document
     If model.DocumentType <> DocumentTypeEnum.kPartDocumentObject AndAlso model.DocumentType <> DocumentTypeEnum.kAssemblyDocumentObject Then
@@ -58,6 +64,7 @@ Sub Main()
 
         drawDoc = app.Documents.Add(DocumentTypeEnum.kDrawingDocumentObject, templatePath, True)
         Dim sheet As Sheet = drawDoc.ActiveSheet
+        ApplyStandard1Title(app, drawDoc, sheet, SeriesFontIn)
         Dim tg As TransientGeometry = app.TransientGeometry
         Dim style As DrawingViewStyleEnum = DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle
         Dim assembly As Boolean = model.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject
@@ -139,6 +146,206 @@ Function FindTemplate(templateFile As String) As String
     Next
     Return ""
 End Function
+
+Sub ApplyStandard1Title(app As Inventor.Application, drawDoc As DrawingDocument, sheet As Sheet, seriesIn As Double)
+    ' Standard.idw stays the sheet. Standard1.idw contributes its title block.
+    Dim sourcePath As String = FindTemplate("Standard1.idw")
+    If sourcePath = "" Then sourcePath = FindTemplate("Standard1.dwg")
+    If sourcePath = "" Then
+        FitTitleText(drawDoc, seriesIn)
+        Return
+    End If
+    Dim source As DrawingDocument = Nothing
+    Dim openedHere As Boolean = False
+    Try
+        source = OpenQuiet(app, sourcePath, openedHere)
+        Dim sourceDef As TitleBlockDefinition = Nothing
+        Dim sourceBlock As TitleBlock = Nothing
+        Try
+            If source IsNot Nothing AndAlso source.ActiveSheet IsNot Nothing Then sourceBlock = source.ActiveSheet.TitleBlock
+        Catch
+        End Try
+        If sourceBlock IsNot Nothing Then sourceDef = sourceBlock.Definition
+        If sourceDef Is Nothing AndAlso source IsNot Nothing AndAlso source.TitleBlockDefinitions.Count > 0 Then
+            sourceDef = source.TitleBlockDefinitions.Item(1)
+        End If
+        If sourceDef Is Nothing Then
+            FitTitleText(drawDoc, seriesIn)
+            Return
+        End If
+        Dim copied As TitleBlockDefinition = sourceDef.CopyTo(drawDoc, True)
+        Dim prompts() As String = New String() {}
+        If sourceBlock IsNot Nothing Then prompts = PromptValues(sourceBlock)
+        If prompts.Length > 0 Then
+            Try
+                sheet.AddTitleBlock(copied, System.Type.Missing, prompts)
+            Catch
+                sheet.AddTitleBlock(copied)
+            End Try
+        Else
+            sheet.AddTitleBlock(copied)
+        End If
+    Catch
+        FitTitleText(drawDoc, seriesIn)
+    Finally
+        If openedHere AndAlso source IsNot Nothing Then
+            Try
+                source.Close(False)
+            Catch
+            End Try
+        End If
+        Try
+            drawDoc.Activate()
+        Catch
+        End Try
+    End Try
+End Sub
+
+Function OpenQuiet(app As Inventor.Application, path As String, ByRef openedHere As Boolean) As DrawingDocument
+    openedHere = False
+    Dim wanted As String = path.ToLower()
+    For Each openDoc As Document In app.Documents
+        Dim named As String = ""
+        Try
+            named = openDoc.FullFileName.ToLower()
+        Catch
+            named = ""
+        End Try
+        If named = wanted Then
+            Dim drawing As DrawingDocument = Nothing
+            Try
+                drawing = openDoc
+            Catch
+                drawing = Nothing
+            End Try
+            If drawing IsNot Nothing Then Return drawing
+        End If
+    Next
+    openedHere = True
+    Return app.Documents.Open(path, False)
+End Function
+
+Function PromptValues(block As TitleBlock) As String()
+    Dim values As New List(Of String)
+    Try
+        For Each box As Inventor.TextBox In block.Definition.Sketch.TextBoxes
+            Dim probe As String = BoxProbe(box)
+            If probe.Contains("<prompt") Then
+                Dim shown As String = ""
+                Try
+                    shown = box.Text
+                Catch
+                    shown = ""
+                End Try
+                values.Add(shown)
+            End If
+        Next
+    Catch
+    End Try
+    Return values.ToArray()
+End Function
+
+Sub FitTitleText(drawDoc As DrawingDocument, seriesIn As Double)
+    If drawDoc Is Nothing OrElse drawDoc.ActiveSheet Is Nothing Then Return
+    Dim block As TitleBlock = Nothing
+    Try
+        block = drawDoc.ActiveSheet.TitleBlock
+    Catch
+        block = Nothing
+    End Try
+    If block Is Nothing Then Return
+    Dim def As TitleBlockDefinition = block.Definition
+    Dim sketch As DrawingSketch = Nothing
+    Dim editing As Boolean = False
+    Try
+        def.Edit(sketch)
+        editing = True
+        For Each box As Inventor.TextBox In sketch.TextBoxes
+            Dim probe As String = BoxProbe(box)
+            If probe.Contains("description") Then
+                ShrinkToBox(drawDoc, box, 0.07)
+            ElseIf probe.Contains("series") Then
+                ApplyFontCm(drawDoc, box, seriesIn * 2.54, "SeriesFont")
+            End If
+        Next
+        def.ExitEdit(True)
+        editing = False
+    Catch
+        If editing Then
+            Try
+                def.ExitEdit(False)
+            Catch
+            End Try
+        End If
+    End Try
+End Sub
+
+Function BoxProbe(box As Inventor.TextBox) As String
+    Dim formatted As String = ""
+    Dim plain As String = ""
+    Try
+        formatted = box.FormattedText
+    Catch
+    End Try
+    Try
+        plain = box.Text
+    Catch
+    End Try
+    Return (formatted & " " & plain).ToLower()
+End Function
+
+Sub ShrinkToBox(drawDoc As DrawingDocument, box As Inventor.TextBox, floorIn As Double)
+    Try
+        Dim boxWidth As Double = box.Width
+        Dim boxHeight As Double = box.Height
+        Dim textWidth As Double = box.FittedTextWidth
+        Dim textHeight As Double = box.FittedTextHeight
+        If boxWidth < 0.2 Then Return
+        Dim widthRatio As Double = 1
+        Dim heightRatio As Double = 1
+        If textWidth > boxWidth Then widthRatio = boxWidth / textWidth
+        If boxHeight > 0.1 AndAlso textHeight > boxHeight Then heightRatio = boxHeight / textHeight
+        Dim fittedRatio As Double = widthRatio
+        If heightRatio < fittedRatio Then fittedRatio = heightRatio
+        If fittedRatio > 0.98 Then Return
+        Dim current As Double = box.Style.FontSize
+        If current < 0.05 Then Return
+        Dim fitted As Double = current * fittedRatio
+        Dim floorCm As Double = floorIn * 2.54
+        If fitted < floorCm Then fitted = floorCm
+        ApplyFontCm(drawDoc, box, fitted, "DescriptionFit")
+        If current * fittedRatio < floorCm Then
+            Dim squeeze As Double = (current * fittedRatio) / floorCm
+            If squeeze < 0.55 Then squeeze = 0.55
+            If squeeze < 0.98 Then box.WidthScale = squeeze
+        End If
+    Catch
+    End Try
+End Sub
+
+Sub ApplyFontCm(drawDoc As DrawingDocument, box As Inventor.TextBox, sizeCm As Double, styleName As String)
+    Dim localStyle As TextStyle = Nothing
+    Try
+        localStyle = drawDoc.StylesManager.TextStyles.Item(styleName)
+    Catch
+        localStyle = Nothing
+    End Try
+    If localStyle Is Nothing Then
+        Try
+            localStyle = box.Style.Copy(styleName)
+        Catch
+            localStyle = box.Style
+        End Try
+    End If
+    Try
+        localStyle.FontSize = sizeCm
+    Catch
+    End Try
+    Try
+        box.Style = localStyle
+    Catch
+    End Try
+End Sub
 
 Function FitScale(sheet As Sheet, model As Document, front As DrawingView) As Double
     Try
