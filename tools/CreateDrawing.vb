@@ -14,9 +14,10 @@
 ' its own part. It is shifted only enough to keep two balloons from
 ' sitting on each other, and it does not have to share a row or a column.
 ' On a part, the top view is left off. Front and side share one scale.
-' The isometric view has its own scale. A long part keeps a wide band for
-' the length. A small part grows into the open sheet. A part view is
-' dimensioned with
+' The side is a projected view from the front when Inventor allows it,
+' placed to the right on the same centerline. The isometric view has its
+' own scale and takes the space that is left. A part
+' view is dimensioned with
 ' the overall size, each distinct wall thickness once, and one radius or
 ' hole size. The steps between those are left off.
 '
@@ -77,14 +78,8 @@ Sub Main()
 
         Dim views As New Dictionary(Of String, DrawingView)
         views("front") = front
-        If assembly Then
-            views("top") = AddChildView(sheet, front, model, tg, style, True)
-            views("side") = AddChildView(sheet, front, model, tg, style, False)
-        Else
-            Dim sideView As DrawingView = AddPartSide(sheet, model, tg, style)
-            If sideView Is Nothing Then sideView = AddChildView(sheet, front, model, tg, style, False)
-            views("side") = sideView
-        End If
+        If assembly Then views("top") = AddChildView(sheet, front, model, tg, style, True)
+        views("side") = AddChildView(sheet, front, model, tg, style, False)
         Dim isoView As DrawingView = AddIsoView(sheet, model, tg, style, front)
         views("iso") = isoView
         If Not isoView Is front Then ApplyHomeCamera(isoView, model)
@@ -240,20 +235,6 @@ Function AddChildView(sheet As Sheet, front As DrawingView, model As Document, t
         Return sheet.DrawingViews.AddBaseView(model, point, childScale, orient, style)
     Catch
         Return front
-    End Try
-End Function
-
-Function AddPartSide(sheet As Sheet, model As Document, tg As TransientGeometry, style As DrawingViewStyleEnum) As DrawingView
-    ' A projected side keeps the front view's scale. A part side is its own
-    ' base view so the short end view can grow without stretching the length.
-    Dim point As Point2d = tg.CreatePoint2d(sheet.Width * 0.46, sheet.Height * 0.24)
-    Try
-        Dim sideView As DrawingView = sheet.DrawingViews.AddBaseView( _
-            model, point, 0.02, ViewOrientationTypeEnum.kRightViewOrientation, style)
-        ApplyFacing(sideView, model, "AppRightViewCmd")
-        Return sideView
-    Catch
-        Return Nothing
     End Try
 End Function
 
@@ -631,9 +612,20 @@ Sub PlaceWithoutList(drawDoc As DrawingDocument, sheet As Sheet, views As Dictio
     CenterInSlot(views("iso"), tg, split + 0.5, isoFloor, rightEdge, topEdge)
 End Sub
 
-Sub PlaceCompactPart(drawDoc As DrawingDocument, sheet As Sheet, views As Dictionary(Of String, DrawingView), tg As TransientGeometry, frontW As Double, frontH As Double, sideW As Double, sideH As Double, isoW As Double, isoH As Double)
-    ' The profile and the isometric view take the open sheet. A thin edge
-    ' view stays in a narrow column so it does not force the profile small.
+Function SheetFit(modelW As Double, modelH As Double, gap As Double, reserveX As Double, reserveY As Double, labelRoom As Double, slotW As Double, slotH As Double) As Double
+    If slotW < 1 OrElse slotH < 1 Then Return 0.005
+    Dim fitW As Double = (slotW - reserveX - gap) / Math.Max(modelW, 0.1)
+    Dim fitH As Double = (slotH - reserveY - labelRoom) / Math.Max(modelH, 0.1)
+    If fitH < fitW Then fitW = fitH
+    If fitW <= 0 Then Return 0.005
+    Return NiceScale(fitW)
+End Function
+
+Sub PlaceAlignedPart(drawDoc As DrawingDocument, sheet As Sheet, views As Dictionary(Of String, DrawingView), tg As TransientGeometry, frontW As Double, frontH As Double, sideW As Double, sideH As Double, isoW As Double, isoH As Double)
+    ' Front and side stay a third-angle pair: the side is to the right,
+    ' on the same centerline, at the same scale. The isometric view takes
+    ' the leftover space at its own scale. Alignment is kept when the move
+    ' lands, and released only when Inventor will not hold that position.
     Dim leftLimit As Double = 0
     Dim bottomLimit As Double = 0
     Dim rightLimit As Double = 0
@@ -661,366 +653,147 @@ Sub PlaceCompactPart(drawDoc As DrawingDocument, sheet As Sheet, views As Dictio
     If usableH < 8 Then usableH = 8
     Dim reserveX As Double = 3.2
     Dim reserveY As Double = 2.6
-    Dim faceIsFront As Boolean = (frontW * frontH) >= (sideW * sideH)
-    Dim faceW As Double = sideW
-    Dim faceH As Double = sideH
-    Dim edgeW As Double = frontW
-    Dim edgeH As Double = frontH
-    If faceIsFront Then
-        faceW = frontW
-        faceH = frontH
-        edgeW = sideW
-        edgeH = sideH
-    End If
-    Dim edgeShort As Double = edgeW
-    Dim edgeLong As Double = edgeH
-    If edgeH < edgeW Then
-        edgeShort = edgeH
-        edgeLong = edgeW
-    End If
-    Dim edgeIsThin As Boolean = edgeShort < edgeLong * 0.4
-    Dim frontL As Double = leftEdge
-    Dim frontB As Double = bottomEdge
-    Dim frontR As Double = leftEdge + innerW * 0.5
-    Dim frontT As Double = topEdge
-    Dim sideL As Double = leftEdge
-    Dim sideB As Double = bottomEdge
-    Dim sideR As Double = frontR
-    Dim sideT As Double = topEdge
-    Dim isoL As Double = frontR
-    Dim isoB As Double = bottomEdge
-    Dim isoR As Double = rightEdge
-    Dim isoT As Double = topEdge
-    Dim frontScale As Double = 0.5
-    Dim sideScale As Double = 0.5
-    Dim isoScale As Double = 0.5
-    If edgeIsThin Then
-        Dim heightForEdge As Double = usableH - reserveY - 0.6
-        Dim sEdge As Double = heightForEdge / Math.Max(edgeH, 0.1)
-        Dim sEdgeW As Double = (innerW * 0.22 - reserveX) / Math.Max(edgeW, 0.1)
-        If edgeH < edgeW Then
-            sEdge = (innerW * 0.55 - reserveX) / Math.Max(edgeW, 0.1)
-            sEdgeW = heightForEdge / Math.Max(edgeH, 0.1)
-        End If
-        If sEdgeW < sEdge Then sEdge = sEdgeW
-        Dim edgeScale As Double = NiceScale(sEdge)
-        Dim edgeSheet As Double = edgeScale * edgeShort
-        Dim column As Double = edgeSheet + reserveX + 0.8
-        If column < reserveX + 2.4 Then column = reserveX + 2.4
-        If column > innerW * 0.3 Then column = innerW * 0.3
-        Dim remain As Double = innerW - column - 0.6
-        If remain < 8 Then remain = 8
-        Dim faceSlot As Double = remain * 0.58
-        Dim faceL As Double = leftEdge + column + 0.35
-        Dim faceR As Double = faceL + faceSlot
-        If faceR > rightEdge - 4 Then faceR = rightEdge - 4
-        Dim faceB As Double = bottomEdge
-        If hasTitle AndAlso faceR > titleL - 0.2 AndAlso titleT + 0.45 > faceB Then faceB = titleT + 0.45
-        Dim faceBoxW As Double = (faceR - faceL) - reserveX - 0.3
-        Dim faceBoxH As Double = (topEdge - faceB) - reserveY - 0.3
-        If faceBoxW < 1 Then faceBoxW = 1
-        If faceBoxH < 1 Then faceBoxH = 1
-        Dim sFace As Double = faceBoxW / Math.Max(faceW, 0.1)
-        Dim sFaceH As Double = faceBoxH / Math.Max(faceH, 0.1)
-        If sFaceH < sFace Then sFace = sFaceH
-        isoL = faceR + 0.35
-        isoR = rightEdge
-        isoB = bottomEdge
-        If hasTitle AndAlso isoR > titleL - 0.2 AndAlso titleT + 0.45 > isoB Then isoB = titleT + 0.45
-        isoT = topEdge
-        Dim sIso As Double = (isoR - isoL - 0.8) / Math.Max(isoW, 0.1)
-        Dim sIsoH As Double = (isoT - isoB - 0.8) / Math.Max(isoH, 0.1)
-        If sIsoH < sIso Then sIso = sIsoH
-        isoScale = NiceScale(sIso)
-        If faceIsFront Then
-            frontScale = NiceScale(sFace)
-            sideScale = edgeScale
-            frontL = faceL
-            frontB = faceB
-            frontR = faceR
-            frontT = topEdge
-            sideL = leftEdge
-            sideB = bottomEdge
-            sideR = leftEdge + column
-            sideT = topEdge
-        Else
-            sideScale = NiceScale(sFace)
-            frontScale = edgeScale
-            sideL = faceL
-            sideB = faceB
-            sideR = faceR
-            sideT = topEdge
-            frontL = leftEdge
-            frontB = bottomEdge
-            frontR = leftEdge + column
-            frontT = topEdge
-        End If
-    Else
-        Dim leftW As Double = innerW * 0.6
-        Dim bestFrac As Double = 0.55
-        Dim bestWorst As Double = -1
-        Dim frac As Double = 0.36
-        Do While frac <= 0.7
-            Dim botH As Double = (usableH - 0.7) * frac
-            Dim topH As Double = (usableH - 0.7) - botH
-            Dim boxW As Double = leftW - reserveX - 0.4
-            If boxW < 1 Then boxW = 1
-            Dim sBot As Double = boxW / Math.Max(faceW, 0.1)
-            Dim sBotH As Double = (botH - reserveY) / Math.Max(faceH, 0.1)
-            If sBotH < sBot Then sBot = sBotH
-            Dim upperFit As Double = boxW / Math.Max(edgeW, 0.1)
-            Dim upperFitH As Double = (topH - reserveY) / Math.Max(edgeH, 0.1)
-            If upperFitH < upperFit Then upperFit = upperFitH
-            Dim worst As Double = sBot
-            If upperFit < worst Then worst = upperFit
-            If worst > bestWorst Then
-                bestWorst = worst
-                bestFrac = frac
-            End If
-            frac = frac + 0.04
-        Loop
-        Dim lowerH As Double = (usableH - 0.7) * bestFrac
-        Dim upperH As Double = (usableH - 0.7) - lowerH
-        Dim stackR As Double = leftEdge + leftW
-        Dim lowerB As Double = bottomEdge
-        If hasTitle AndAlso stackR > titleL - 0.2 AndAlso titleT + 0.45 > lowerB Then lowerB = titleT + 0.45
-        Dim lowerT As Double = bottomEdge + lowerH
-        If lowerT < lowerB + 3 Then lowerT = lowerB + 3
-        Dim upperB As Double = lowerT + 0.7
-        Dim upperT As Double = topEdge
-        Dim faceBoxW As Double = (stackR - leftEdge) - reserveX - 0.3
-        Dim faceBoxH As Double = (lowerT - lowerB) - reserveY - 0.3
-        Dim edgeBoxH As Double = (upperT - upperB) - reserveY - 0.3
-        If faceBoxW < 1 Then faceBoxW = 1
-        If faceBoxH < 1 Then faceBoxH = 1
-        If edgeBoxH < 1 Then edgeBoxH = 1
-        Dim sFace As Double = faceBoxW / Math.Max(faceW, 0.1)
-        Dim sFaceH As Double = faceBoxH / Math.Max(faceH, 0.1)
-        If sFaceH < sFace Then sFace = sFaceH
-        Dim sEdge As Double = faceBoxW / Math.Max(edgeW, 0.1)
-        Dim sEdgeH As Double = edgeBoxH / Math.Max(edgeH, 0.1)
-        If sEdgeH < sEdge Then sEdge = sEdgeH
-        isoL = stackR + 0.35
-        isoR = rightEdge
-        isoB = bottomEdge
-        If hasTitle AndAlso isoR > titleL - 0.2 AndAlso titleT + 0.45 > isoB Then isoB = titleT + 0.45
-        isoT = topEdge
-        Dim sIso As Double = (isoR - isoL - 0.8) / Math.Max(isoW, 0.1)
-        Dim sIsoH As Double = (isoT - isoB - 0.8) / Math.Max(isoH, 0.1)
-        If sIsoH < sIso Then sIso = sIsoH
-        isoScale = NiceScale(sIso)
-        If faceIsFront Then
-            frontScale = NiceScale(sFace)
-            sideScale = NiceScale(sEdge)
-            frontL = leftEdge
-            frontB = lowerB
-            frontR = stackR
-            frontT = lowerT
-            sideL = leftEdge
-            sideB = upperB
-            sideR = stackR
-            sideT = upperT
-        Else
-            sideScale = NiceScale(sFace)
-            frontScale = NiceScale(sEdge)
-            sideL = leftEdge
-            sideB = lowerB
-            sideR = stackR
-            sideT = lowerT
-            frontL = leftEdge
-            frontB = upperB
-            frontR = stackR
-            frontT = upperT
-        End If
-    End If
-    Dim sideLinked As Boolean = ViewIsAligned(views("side"))
-    Dim orthoScale As Double = frontScale
-    If sideScale < orthoScale Then orthoScale = sideScale
-    TrySetScale(views("front"), orthoScale)
-    If (Not sideLinked) AndAlso (Not views("side") Is views("front")) Then TrySetScale(views("side"), orthoScale)
-    TrySetScale(views("iso"), isoScale)
-    QuietUpdate(drawDoc)
+    Dim labelRoom As Double = 1.15
+    Dim gap As Double = 3.4
     Dim frontView As DrawingView = views("front")
     Dim sideView As DrawingView = views("side")
     Dim isoView As DrawingView = views("iso")
-    Dim frontTight As Boolean = SlotOverflow(frontView, (frontR - frontL) - reserveX - 0.2, (frontT - frontB) - reserveY - 0.2)
-    Dim sideTight As Boolean = False
-    If Not sideView Is frontView Then sideTight = SlotOverflow(sideView, (sideR - sideL) - reserveX - 0.2, (sideT - sideB) - reserveY - 0.2)
-    If frontTight OrElse sideTight Then
+    Dim hasSide As Boolean = (Not sideView Is frontView)
+    Dim spanW As Double = frontW
+    Dim spanH As Double = frontH
+    If hasSide Then
+        spanW = frontW + sideW
+        If sideH > spanH Then spanH = sideH
+    Else
+        gap = 0
+    End If
+    Dim leftW As Double = innerW * 0.62
+    Dim scaleA As Double = SheetFit(spanW, spanH, gap, reserveX, reserveY, labelRoom, leftW, usableH)
+    If hasSide AndAlso hasTitle Then
+        Dim colA As Double = reserveX + scaleA * spanW + gap + 0.35
+        If leftEdge + colA > titleL - 0.2 AndAlso titleT + 0.45 > bottomEdge Then
+            Dim raisedH As Double = topEdge - (titleT + 0.45)
+            If raisedH < 3 Then raisedH = 3
+            scaleA = SheetFit(spanW, spanH, gap, reserveX, reserveY, labelRoom, leftW, raisedH)
+        End If
+    End If
+    Dim bandFloor As Double = bottomEdge + usableH * 0.45
+    Dim slotHB As Double = topEdge - bandFloor
+    If hasTitle AndAlso rightEdge > titleL - 0.2 AndAlso titleT + 0.45 > bandFloor Then
+        slotHB = topEdge - (titleT + 0.45)
+        If slotHB < 3 Then slotHB = 3
+    End If
+    Dim scaleB As Double = SheetFit(spanW, spanH, gap, reserveX, reserveY, labelRoom, innerW, slotHB)
+    Dim beside As Boolean = scaleA >= scaleB
+    Dim orthoScale As Double = scaleB
+    If beside Then orthoScale = scaleA
+    Dim orthoL As Double = leftEdge
+    Dim orthoB As Double = bottomEdge
+    Dim orthoR As Double = rightEdge
+    Dim orthoT As Double = topEdge
+    Dim isoL As Double = leftEdge
+    Dim isoB As Double = bottomEdge
+    Dim isoR As Double = rightEdge
+    Dim isoT As Double = topEdge
+    If beside Then
+        orthoL = leftEdge
+        orthoR = leftEdge + reserveX + orthoScale * spanW + gap + 0.35
+        If orthoR > leftEdge + leftW Then orthoR = leftEdge + leftW
+        If orthoR > rightEdge - 4 Then orthoR = rightEdge - 4
+        orthoT = topEdge
+        orthoB = bottomEdge
+        If hasTitle AndAlso orthoR > titleL - 0.2 AndAlso titleT + 0.45 > orthoB Then orthoB = titleT + 0.45
+        isoL = orthoR + 0.4
+        If isoL > rightEdge - 3 Then isoL = rightEdge - 3
+        isoR = rightEdge
+        isoT = topEdge
+        isoB = bottomEdge
+        If hasTitle AndAlso isoR > titleL - 0.2 AndAlso titleT + 0.45 > isoB Then isoB = titleT + 0.45
+    Else
+        Dim band As Double = reserveY + orthoScale * spanH + labelRoom + 0.25
+        If band > usableH * 0.55 Then band = usableH * 0.55
+        If band < 4 Then band = 4
+        orthoL = leftEdge
+        orthoR = rightEdge
+        orthoT = topEdge
+        orthoB = topEdge - band
+        If orthoB < bottomEdge Then orthoB = bottomEdge
+        If hasTitle AndAlso orthoR > titleL - 0.2 AndAlso titleT + 0.45 > orthoB Then orthoB = titleT + 0.45
+        isoL = leftEdge
+        isoR = rightEdge
+        isoT = orthoB - 0.4
+        isoB = bottomEdge
+        If hasTitle AndAlso isoR > titleL - 0.2 AndAlso titleT + 0.45 > isoB Then isoB = titleT + 0.45
+        If isoT < isoB + 3 Then isoT = isoB + 3
+    End If
+    Dim isoScale As Double = SheetFit(isoW, isoH, 0, 0.45, 0.45, labelRoom, isoR - isoL, isoT - isoB)
+    Dim sideLinked As Boolean = False
+    If hasSide Then sideLinked = ViewIsAligned(sideView)
+    TrySetScale(frontView, orthoScale)
+    If hasSide AndAlso (Not sideLinked) Then TrySetScale(sideView, orthoScale)
+    TrySetScale(isoView, isoScale)
+    QuietUpdate(drawDoc)
+    Dim allowW As Double = orthoR - orthoL - reserveX - gap
+    Dim allowH As Double = orthoT - orthoB - reserveY - labelRoom
+    If allowW < 1 Then allowW = 1
+    If allowH < 1 Then allowH = 1
+    Dim usedW As Double = 1
+    Dim usedH As Double = 1
+    Try
+        usedW = frontView.Width
+        usedH = frontView.Height
+        If hasSide Then
+            usedW = frontView.Width + sideView.Width
+            If sideView.Height > usedH Then usedH = sideView.Height
+        End If
+    Catch
+    End Try
+    If usedW > allowW * 1.08 OrElse usedH > allowH * 1.08 Then
         orthoScale = NextSmallerScale(orthoScale)
-        TrySetScale(views("front"), orthoScale)
-        If (Not sideLinked) AndAlso (Not sideView Is frontView) Then TrySetScale(views("side"), orthoScale)
+        TrySetScale(frontView, orthoScale)
+        If hasSide AndAlso (Not sideLinked) Then TrySetScale(sideView, orthoScale)
         QuietUpdate(drawDoc)
     End If
-    FitInside(drawDoc, isoView, isoR - isoL - 0.5, isoT - isoB - 0.5)
-    SeatForDims(frontView, tg, frontL, frontB, frontR, frontT, reserveX, reserveY)
-    If Not sideView Is frontView Then SeatForDims(sideView, tg, sideL, sideB, sideR, sideT, reserveX, reserveY)
+    FitInside(drawDoc, isoView, isoR - isoL - 0.3, isoT - isoB - 0.3)
+    If Not hasSide Then
+        SeatForDims(frontView, tg, orthoL, orthoB, orthoR, orthoT, reserveX, reserveY)
+        CenterInSlot(isoView, tg, isoL, isoB, isoR, isoT)
+        Return
+    End If
+    Dim blockW As Double = frontView.Width + gap + sideView.Width
+    Dim blockH As Double = frontView.Height
+    If sideView.Height > blockH Then blockH = sideView.Height
+    Dim minLeft As Double = orthoL + reserveX
+    Dim maxLeft As Double = orthoR - blockW - 0.15
+    If maxLeft < minLeft Then maxLeft = minLeft
+    Dim blockLeft As Double = (minLeft + maxLeft) / 2
+    Dim lowCenter As Double = orthoB + reserveY + blockH / 2
+    Dim highCenter As Double = orthoT - labelRoom - blockH / 2
+    If highCenter < lowCenter Then highCenter = lowCenter
+    Dim centerY As Double = (lowCenter + highCenter) / 2
+    Dim frontX As Double = blockLeft + frontView.Width / 2
+    Dim sideX As Double = blockLeft + frontView.Width + gap + sideView.Width / 2
+    TryMove(frontView, tg.CreatePoint2d(frontX, centerY))
+    TryMove(sideView, tg.CreatePoint2d(sideX, centerY))
+    Dim landed As Boolean = False
+    Try
+        Dim dx As Double = Math.Abs(sideView.Position.X - sideX)
+        Dim dy As Double = Math.Abs(sideView.Position.Y - centerY)
+        If dx < 0.8 AndAlso dy < 0.4 Then landed = True
+    Catch
+    End Try
+    If Not landed Then
+        ReleaseAlignment(sideView)
+        TrySetScale(sideView, orthoScale)
+        TryMove(sideView, tg.CreatePoint2d(sideX, centerY))
+        QuietUpdate(drawDoc)
+    End If
     CenterInSlot(isoView, tg, isoL, isoB, isoR, isoT)
 End Sub
 
 Sub PlacePartViews(drawDoc As DrawingDocument, sheet As Sheet, views As Dictionary(Of String, DrawingView), tg As TransientGeometry, frontW As Double, frontH As Double, sideW As Double, sideH As Double, isoW As Double, isoH As Double)
-    ' A long bar keeps the wide band. A compact part, such as a gusset,
-    ' uses the empty sheet so the profile can be larger than 1/10.
-    Dim s0 As Double = frontW
-    Dim s1 As Double = frontH
-    Dim s2 As Double = sideW
-    Dim s3 As Double = sideH
-    Dim swapSpan As Double = 0
-    Dim pass As Integer = 0
-    Do While pass < 4
-        If s1 > s0 Then
-            swapSpan = s0
-            s0 = s1
-            s1 = swapSpan
-        End If
-        If s2 > s1 Then
-            swapSpan = s1
-            s1 = s2
-            s2 = swapSpan
-        End If
-        If s3 > s2 Then
-            swapSpan = s2
-            s2 = s3
-            s3 = swapSpan
-        End If
-        pass = pass + 1
-    Loop
-    If s0 <= s1 * 3.5 Then
-        PlaceCompactPart(drawDoc, sheet, views, tg, frontW, frontH, sideW, sideH, isoW, isoH)
-        Return
-    End If
-    ' Three views. The long ortho view takes a full-width band. The short
-    ' one, usually the end view, takes the larger upper slot at its own scale.
-    Dim leftLimit As Double = 0
-    Dim bottomLimit As Double = 0
-    Dim rightLimit As Double = 0
-    Dim topLimit As Double = 0
-    BorderLimits(sheet, leftLimit, bottomLimit, rightLimit, topLimit)
-    Dim pad As Double = 0.5
-    Dim leftEdge As Double = leftLimit + pad
-    Dim bottomEdge As Double = bottomLimit + pad
-    Dim rightEdge As Double = rightLimit - pad
-    Dim topEdge As Double = topLimit - pad
-    Dim listL As Double = 0
-    Dim listB As Double = 0
-    Dim listR As Double = 0
-    Dim listT As Double = 0
-    Dim hasList As Boolean = False
-    Dim titleL As Double = 0
-    Dim titleB As Double = 0
-    Dim titleR As Double = 0
-    Dim titleT As Double = 0
-    Dim hasTitle As Boolean = False
-    ReadOccupied(sheet, listL, listB, listR, listT, hasList, titleL, titleB, titleR, titleT, hasTitle)
-    Dim floorY As Double = bottomEdge
-    If hasTitle AndAlso titleT + 0.5 > floorY Then floorY = titleT + 0.5
-    Dim innerW As Double = rightEdge - leftEdge
-    Dim usableH As Double = topEdge - floorY
-    If innerW < 8 Then innerW = 8
-    If usableH < 8 Then usableH = 8
-    Dim reserveX As Double = 3.4
-    Dim reserveY As Double = 3.4
-    Dim gap As Double = 0.75
-    Dim longIsSide As Boolean = sideW >= frontW
-    Dim longW As Double = frontW
-    Dim longH As Double = frontH
-    Dim shortW As Double = sideW
-    Dim shortH As Double = sideH
-    If longIsSide Then
-        longW = sideW
-        longH = sideH
-        shortW = frontW
-        shortH = frontH
-    End If
-    Dim maxBand As Double = usableH * 0.38
-    If maxBand < reserveY + 2.4 Then maxBand = reserveY + 2.4
-    If maxBand > usableH - 8 Then maxBand = usableH - 8
-    If maxBand < 4 Then maxBand = 4
-    Dim sLong As Double = (innerW - reserveX - 0.8) / Math.Max(longW, 0.1)
-    Dim sLongLimit As Double = (maxBand - reserveY - 0.4) / Math.Max(longH, 0.1)
-    If sLongLimit < sLong Then sLong = sLongLimit
-    Dim longScale As Double = NiceScale(sLong)
-    Dim bandH As Double = longScale * longH + reserveY + 0.55
-    If bandH > maxBand Then bandH = maxBand
-    If bandH < reserveY + 1.6 Then bandH = reserveY + 1.6
-    Dim upperH As Double = usableH - bandH - gap
-    If upperH < 7 Then
-        upperH = 7
-        bandH = usableH - upperH - gap
-        If bandH < 4 Then bandH = 4
-    End If
-    Dim splitX As Double = leftEdge + innerW * 0.6
-    Dim upperBottom As Double = floorY + bandH + gap
-    Dim longL As Double = leftEdge
-    Dim longB As Double = floorY
-    Dim longR As Double = rightEdge
-    Dim longT As Double = floorY + bandH
-    Dim shortL As Double = leftEdge
-    Dim shortB As Double = upperBottom
-    Dim shortR As Double = splitX - 0.25
-    Dim shortT As Double = topEdge
-    Dim isoL As Double = splitX + 0.35
-    Dim isoB As Double = upperBottom
-    Dim isoR As Double = rightEdge
-    Dim isoT As Double = topEdge
-    Dim shortBoxW As Double = (shortR - shortL) - reserveX - 0.45
-    Dim shortBoxH As Double = (shortT - shortB) - reserveY - 0.4
-    If shortBoxW < 1 Then shortBoxW = 1
-    If shortBoxH < 1 Then shortBoxH = 1
-    Dim sShort As Double = shortBoxW / Math.Max(shortW, 0.1)
-    Dim sShortH As Double = shortBoxH / Math.Max(shortH, 0.1)
-    If sShortH < sShort Then sShort = sShortH
-    Dim sIso As Double = (isoR - isoL - 0.8) / Math.Max(isoW, 0.1)
-    Dim sIsoH As Double = (isoT - isoB - 0.8) / Math.Max(isoH, 0.1)
-    If sIsoH < sIso Then sIso = sIsoH
-    Dim sideLinked As Boolean = ViewIsAligned(views("side"))
-    Dim orthoScale As Double = longScale
-    Dim shortScale As Double = NiceScale(sShort)
-    If shortScale < orthoScale Then orthoScale = shortScale
-    TrySetScale(views("front"), orthoScale)
-    If (Not sideLinked) AndAlso (Not views("side") Is views("front")) Then TrySetScale(views("side"), orthoScale)
-    TrySetScale(views("iso"), NiceScale(sIso))
-    QuietUpdate(drawDoc)
-    Dim frontView As DrawingView = views("front")
-    Dim sideView As DrawingView = views("side")
-    Dim isoView As DrawingView = views("iso")
-    Dim longBoxW As Double = longR - longL - reserveX - 0.4
-    Dim longBoxH As Double = longT - longB - reserveY - 0.3
-    If longBoxW < 1 Then longBoxW = 1
-    If longBoxH < 1 Then longBoxH = 1
-    Dim frontBoxW As Double = shortBoxW
-    Dim frontBoxH As Double = shortBoxH
-    Dim sideBoxW As Double = longBoxW
-    Dim sideBoxH As Double = longBoxH
-    If longIsSide Then
-        frontBoxW = shortBoxW
-        frontBoxH = shortBoxH
-        sideBoxW = longBoxW
-        sideBoxH = longBoxH
-    Else
-        frontBoxW = longBoxW
-        frontBoxH = longBoxH
-        sideBoxW = shortBoxW
-        sideBoxH = shortBoxH
-    End If
-    Dim frontTight As Boolean = SlotOverflow(frontView, frontBoxW, frontBoxH)
-    Dim sideTight As Boolean = False
-    If Not sideView Is frontView Then sideTight = SlotOverflow(sideView, sideBoxW, sideBoxH)
-    If frontTight OrElse sideTight Then
-        orthoScale = NextSmallerScale(orthoScale)
-        TrySetScale(views("front"), orthoScale)
-        If (Not sideLinked) AndAlso (Not sideView Is frontView) Then TrySetScale(views("side"), orthoScale)
-        QuietUpdate(drawDoc)
-    End If
-    FitInside(drawDoc, isoView, isoR - isoL - 0.6, isoT - isoB - 0.6)
-    If longIsSide Then
-        If Not sideView Is frontView Then SeatForDims(sideView, tg, longL, longB, longR, longT, reserveX, reserveY)
-        SeatForDims(frontView, tg, shortL, shortB, shortR, shortT, reserveX, reserveY)
-    Else
-        SeatForDims(frontView, tg, longL, longB, longR, longT, reserveX, reserveY)
-        If Not sideView Is frontView Then SeatForDims(sideView, tg, shortL, shortB, shortR, shortT, reserveX, reserveY)
-    End If
-    CenterInSlot(isoView, tg, isoL, isoB, isoR, isoT)
+    ' Parts keep the projected side. Assemblies never reach this sub.
+    PlaceAlignedPart(drawDoc, sheet, views, tg, frontW, frontH, sideW, sideH, isoW, isoH)
 End Sub
 
 Function ViewIsAligned(view As DrawingView) As Boolean
@@ -1114,6 +887,9 @@ Sub NudgeEachView(sheet As Sheet, views As Dictionary(Of String, DrawingView), t
                 Dim lift As Double = (titleT + 0.35) - (low + moveY)
                 If lift > 0 Then moveY = moveY + lift
             End If
+            ' A projected view can slide along its centerline. Moving it
+            ' up or down would pull it off the front view.
+            If ViewIsAligned(sheetView) Then moveY = 0
             If moveX <> 0 OrElse moveY <> 0 Then
                 TryMove(sheetView, tg.CreatePoint2d(sheetView.Position.X + moveX, sheetView.Position.Y + moveY))
             End If
