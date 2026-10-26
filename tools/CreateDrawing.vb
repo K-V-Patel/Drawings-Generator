@@ -21,9 +21,8 @@
 ' the overall size, each distinct wall thickness once, and one radius or
 ' hole size. The steps between those are left off.
 '
-' The drawing is saved as the part number .idw in the sibling Drawing
-' folder when that folder exists, otherwise beside the model. An existing
-' file is left alone and a -generated name is used. No .drawgen.json is written.
+' The drawing stays open in Inventor. It is not saved automatically.
+' No .drawgen.json is written.
 '
 ' iLogic misreads a quote typed inside a string, so every quote is Chr(34).
 
@@ -109,14 +108,7 @@ Sub Main()
             If Not views("side") Is views("front") Then PlaceLabelAbove(views("side"), tg)
         End If
 
-        Dim idwPath As String = ""
-        Try
-            idwPath = SaveDrawing(drawDoc, model)
-        Catch ex As Exception
-            MessageBox.Show("Could not save the drawing: " & ex.Message, "Drawings Generator")
-            Return
-        End Try
-        Dim done As String = "Created " & idwPath
+        Dim done As String = "Drawing is open. Save it in Inventor if you want to keep it."
         If balloonNote <> "" Then done = done & vbLf & balloonNote
         MessageBox.Show(done, "Drawings Generator")
     Catch ex As Exception
@@ -3169,82 +3161,6 @@ Function PointOnCurve(curve As DrawingCurve) As Point2d
     Catch
     End Try
     Return Nothing
-End Function
-
-Function SaveDrawing(drawDoc As DrawingDocument, model As Document) As String
-    QuietUpdate(drawDoc)
-    Try
-        ThisApplication.ScreenUpdating = True
-    Catch
-    End Try
-    Dim path As String = OutputPath(model, ".idw")
-    Dim saved As String = TrySaveAs(drawDoc, path)
-    If saved <> "" Then Return saved
-    Dim folder As String = ""
-    Try
-        folder = System.IO.Path.GetDirectoryName(model.FullFileName)
-    Catch
-        folder = ""
-    End Try
-    If folder = "" Then Throw New Exception("Unspecified error (0x80004005 (E_FAIL))")
-    Dim shortStem As String = SafeFile(Prop(model, "Design Tracking Properties", "Part Number"))
-    If shortStem.Length > 24 Then shortStem = shortStem.Substring(0, 24).Trim()
-    If shortStem = "" Then shortStem = "Drawing"
-    Dim shortPath As String = System.IO.Path.Combine(folder, shortStem & "-generated.idw")
-    Dim n As Integer = 2
-    While System.IO.File.Exists(shortPath)
-        shortPath = System.IO.Path.Combine(folder, shortStem & "-generated-" & n.ToString() & ".idw")
-        n = n + 1
-    End While
-    saved = TrySaveAs(drawDoc, shortPath)
-    If saved <> "" Then Return saved
-    Throw New Exception("Unspecified error (0x80004005 (E_FAIL))")
-End Function
-
-Function TrySaveAs(drawDoc As DrawingDocument, path As String) As String
-    Try
-        drawDoc.SaveAs(path, False)
-        If System.IO.File.Exists(path) Then Return path
-    Catch
-    End Try
-    Try
-        drawDoc.SaveAs(path, True)
-        If System.IO.File.Exists(path) Then Return path
-    Catch
-    End Try
-    Return ""
-End Function
-
-Function OutputPath(model As Document, extension As String) As String
-    Dim folder As String = System.IO.Path.GetDirectoryName(model.FullFileName)
-    Dim parent As String = System.IO.Path.GetDirectoryName(folder)
-    If parent <> "" Then
-        Dim drawingFolder As String = System.IO.Path.Combine(parent, "Drawing")
-        If System.IO.Directory.Exists(drawingFolder) Then folder = drawingFolder
-    End If
-    Dim partNo As String = Prop(model, "Design Tracking Properties", "Part Number")
-    If partNo = "" Then partNo = System.IO.Path.GetFileNameWithoutExtension(model.FullFileName)
-    Dim stem As String = SafeFile(partNo)
-    Dim path As String = System.IO.Path.Combine(folder, stem & extension)
-    If Not System.IO.File.Exists(path) Then Return path
-    path = System.IO.Path.Combine(folder, stem & "-generated" & extension)
-    Dim n As Integer = 2
-    While System.IO.File.Exists(path)
-        path = System.IO.Path.Combine(folder, stem & "-generated-" & n.ToString() & extension)
-        n += 1
-    End While
-    Return path
-End Function
-
-Function SafeFile(value As String) As String
-    Dim cleaned As String = value
-    For Each ch As Char In System.IO.Path.GetInvalidFileNameChars()
-        cleaned = cleaned.Replace(ch, "-"c)
-    Next
-    cleaned = cleaned.Trim()
-    If cleaned.Length > 48 Then cleaned = cleaned.Substring(0, 48).Trim()
-    If cleaned = "" Then cleaned = "Drawing"
-    Return cleaned
 End Function
 
 Function Prop(doc As Document, setName As String, propName As String) As String
