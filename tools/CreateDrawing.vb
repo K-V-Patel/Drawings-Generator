@@ -55,11 +55,7 @@ Sub Main()
     app.ScreenUpdating = False
     Dim drawDoc As DrawingDocument = Nothing
     Try
-        If model.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then
-            Dim asm As AssemblyDocument = model
-            asm.ComponentDefinition.BOM.StructuredViewEnabled = True
-            asm.ComponentDefinition.BOM.StructuredViewFirstLevelOnly = True
-        End If
+        EnableStructuredBom(model)
 
         drawDoc = app.Documents.Add(DocumentTypeEnum.kDrawingDocumentObject, templatePath, True)
         Dim sheet As Sheet = drawDoc.ActiveSheet
@@ -70,17 +66,16 @@ Sub Main()
             0.1, ViewOrientationTypeEnum.kFrontViewOrientation, style)
         ApplyFacing(front, model, "AppFrontViewCmd")
         QuietUpdate(drawDoc)
-        front.Scale = FitScale(sheet, model, front)
+        TrySetScale(front, FitScale(sheet, model, front))
         QuietUpdate(drawDoc)
 
         Dim views As New Dictionary(Of String, DrawingView)
         views("front") = front
-        views("top") = sheet.DrawingViews.AddProjectedView(front, tg.CreatePoint2d(front.Position.X, front.Position.Y + front.Height), style)
-        views("side") = sheet.DrawingViews.AddProjectedView(front, tg.CreatePoint2d(front.Position.X + front.Width, front.Position.Y), style)
-        views("iso") = sheet.DrawingViews.AddBaseView( _
-            model, tg.CreatePoint2d(sheet.Width * 0.75, sheet.Height * 0.68), _
-            front.Scale, ViewOrientationTypeEnum.kIsoTopRightViewOrientation, style)
-        ApplyHomeCamera(views("iso"), model)
+        views("top") = AddChildView(sheet, front, model, tg, style, True)
+        views("side") = AddChildView(sheet, front, model, tg, style, False)
+        Dim isoView As DrawingView = AddIsoView(sheet, model, tg, style, front)
+        views("iso") = isoView
+        If Not isoView Is front Then ApplyHomeCamera(isoView, model)
         QuietUpdate(drawDoc)
         If model.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject Then
             ShowAssemblyParts(sheet, views)
@@ -150,18 +145,99 @@ Function FindTemplate(templateFile As String) As String
 End Function
 
 Function FitScale(sheet As Sheet, model As Document, front As DrawingView) As Double
-    Dim box As Box = model.ComponentDefinition.RangeBox
-    Dim sizes As New List(Of Double)
-    sizes.Add(Math.Abs(box.MaxPoint.X - box.MinPoint.X))
-    sizes.Add(Math.Abs(box.MaxPoint.Y - box.MinPoint.Y))
-    sizes.Add(Math.Abs(box.MaxPoint.Z - box.MinPoint.Z))
-    sizes.Sort()
-    sizes.Reverse()
-    Dim usableW As Double = Math.Max(sheet.Width - 10, 8)
-    Dim usableH As Double = Math.Max(sheet.Height - 14, 6)
-    Dim needW As Double = Math.Max(sizes(0) + sizes(1), front.Width / Math.Max(front.Scale, 0.0001))
-    Dim needH As Double = Math.Max(sizes(1) + sizes(2), front.Height / Math.Max(front.Scale, 0.0001))
-    Return NiceScale(Math.Min(usableW / Math.Max(needW, 0.1), usableH / Math.Max(needH, 0.1)))
+    Try
+        Dim box As Box = model.ComponentDefinition.RangeBox
+        Dim sizes As New List(Of Double)
+        sizes.Add(Math.Abs(box.MaxPoint.X - box.MinPoint.X))
+        sizes.Add(Math.Abs(box.MaxPoint.Y - box.MinPoint.Y))
+        sizes.Add(Math.Abs(box.MaxPoint.Z - box.MinPoint.Z))
+        sizes.Sort()
+        sizes.Reverse()
+        Dim usableW As Double = Math.Max(sheet.Width - 10, 8)
+        Dim usableH As Double = Math.Max(sheet.Height - 14, 6)
+        Dim needW As Double = Math.Max(sizes(0) + sizes(1), front.Width / Math.Max(front.Scale, 0.0001))
+        Dim needH As Double = Math.Max(sizes(1) + sizes(2), front.Height / Math.Max(front.Scale, 0.0001))
+        Return NiceScale(Math.Min(usableW / Math.Max(needW, 0.1), usableH / Math.Max(needH, 0.1)))
+    Catch
+        Return 0.02
+    End Try
+End Function
+
+Sub EnableStructuredBom(model As Document)
+    If model Is Nothing Then Return
+    If model.DocumentType <> DocumentTypeEnum.kAssemblyDocumentObject Then Return
+    Dim asm As AssemblyDocument = Nothing
+    Try
+        asm = model
+    Catch
+        Return
+    End Try
+    Try
+        asm.ComponentDefinition.BOM.StructuredViewEnabled = True
+    Catch
+    End Try
+    Try
+        asm.ComponentDefinition.BOM.StructuredViewFirstLevelOnly = True
+    Catch
+    End Try
+End Sub
+
+Sub TrySetScale(view As DrawingView, scale As Double)
+    If view Is Nothing Then Return
+    If scale < 0.005 Then scale = 0.005
+    If scale > 2 Then scale = 2
+    Try
+        view.Scale = scale
+    Catch
+    End Try
+End Sub
+
+Function AddChildView(sheet As Sheet, front As DrawingView, model As Document, tg As TransientGeometry, style As DrawingViewStyleEnum, placeAbove As Boolean) As DrawingView
+    Dim rise As Double = 5
+    Dim run As Double = 5
+    Try
+        If front.Height > rise Then rise = front.Height
+        If front.Width > run Then run = front.Width
+    Catch
+    End Try
+    Dim point As Point2d = tg.CreatePoint2d(front.Position.X, front.Position.Y + rise)
+    Dim orient As ViewOrientationTypeEnum = ViewOrientationTypeEnum.kTopViewOrientation
+    If Not placeAbove Then
+        point = tg.CreatePoint2d(front.Position.X + run, front.Position.Y)
+        orient = ViewOrientationTypeEnum.kRightViewOrientation
+    End If
+    Try
+        Return sheet.DrawingViews.AddProjectedView(front, point, style)
+    Catch
+    End Try
+    Try
+        Dim childScale As Double = 0.02
+        Try
+            childScale = front.Scale
+        Catch
+        End Try
+        Return sheet.DrawingViews.AddBaseView(model, point, childScale, orient, style)
+    Catch
+        Return front
+    End Try
+End Function
+
+Function AddIsoView(sheet As Sheet, model As Document, tg As TransientGeometry, style As DrawingViewStyleEnum, front As DrawingView) As DrawingView
+    Dim point As Point2d = tg.CreatePoint2d(sheet.Width * 0.75, sheet.Height * 0.68)
+    Dim childScale As Double = 0.02
+    Try
+        childScale = front.Scale
+    Catch
+    End Try
+    Try
+        Return sheet.DrawingViews.AddBaseView(model, point, childScale, ViewOrientationTypeEnum.kIsoTopRightViewOrientation, style)
+    Catch
+    End Try
+    Try
+        Return sheet.DrawingViews.AddBaseView(model, point, 0.02, ViewOrientationTypeEnum.kIsoTopRightViewOrientation, style)
+    Catch
+        Return front
+    End Try
 End Function
 
 Function NiceScale(exact As Double) As Double
@@ -191,8 +267,14 @@ Sub CenterInSlot(view As DrawingView, tg As TransientGeometry, slotL As Double, 
     If view Is Nothing OrElse view.Position Is Nothing Then Return
     Dim x As Double = (slotL + slotR) / 2
     Dim y As Double = (slotB + slotT) / 2
-    Dim halfW As Double = view.Width / 2
-    Dim halfH As Double = view.Height / 2
+    Dim halfW As Double = 1
+    Dim halfH As Double = 1
+    Try
+        halfW = view.Width / 2
+        halfH = view.Height / 2
+    Catch
+        Return
+    End Try
     If x - halfW < slotL Then x = slotL + halfW
     If x + halfW > slotR Then x = slotR - halfW
     If y - halfH < slotB Then y = slotB + halfH
@@ -253,8 +335,8 @@ Function SafeSpan(view As DrawingView, model As Document, horizontal As Boolean)
 End Function
 
 Sub ShrinkToSheet(drawDoc As DrawingDocument, sheet As Sheet, views As Dictionary(Of String, DrawingView), tg As TransientGeometry, model As Document)
-    views("front").Scale = 0.02
-    views("iso").Scale = 0.02
+    TrySetScale(views("front"), 0.02)
+    TrySetScale(views("iso"), 0.02)
     QuietUpdate(drawDoc)
     If sheet.PartsLists.Count > 0 Then FitTableForSheet(drawDoc, sheet, tg)
     QuietUpdate(drawDoc)
@@ -426,16 +508,16 @@ Sub PlaceAroundList(drawDoc As DrawingDocument, sheet As Sheet, views As Diction
         If fallback > bestScale Then bestScale = fallback
         If bestScale > 0.08 Then bestScale = 0.08
     End If
-    views("front").Scale = NiceScale(bestScale * 0.98)
+    TrySetScale(views("front"), NiceScale(bestScale * 0.98))
     Dim sIso As Double = ScaleToFit(isoW, isoH, bestIsoR - bestIsoL, bestIsoT - bestIsoB)
-    views("iso").Scale = NiceScale(sIso * 0.98)
+    TrySetScale(views("iso"), NiceScale(sIso * 0.98))
     QuietUpdate(drawDoc)
     If SlotOverflow(views(upperKey), bestUpR - bestUpL, bestUpT - bestUpB) OrElse SlotOverflow(views(wideKey), bestWideR - bestWideL, bestWideT - bestWideB) OrElse SlotOverflow(views(endKey), bestEndR - bestEndL, bestEndT - bestEndB) Then
-        views("front").Scale = NextSmallerScale(views("front").Scale)
+        TrySetScale(views("front"), NextSmallerScale(views("front").Scale))
         QuietUpdate(drawDoc)
     End If
     If SlotOverflow(views("iso"), bestIsoR - bestIsoL, bestIsoT - bestIsoB) Then
-        views("iso").Scale = NextSmallerScale(views("iso").Scale)
+        TrySetScale(views("iso"), NextSmallerScale(views("iso").Scale))
         QuietUpdate(drawDoc)
     End If
     CenterInSlot(views(upperKey), tg, bestUpL, bestUpB, bestUpR, bestUpT)
@@ -447,8 +529,11 @@ End Sub
 Function SlotOverflow(view As DrawingView, boxW As Double, boxH As Double) As Boolean
     If view Is Nothing Then Return False
     If boxW < 1 OrElse boxH < 1 Then Return False
-    If view.Width > boxW * 1.08 Then Return True
-    If view.Height > boxH * 1.08 Then Return True
+    Try
+        If view.Width > boxW * 1.08 Then Return True
+        If view.Height > boxH * 1.08 Then Return True
+    Catch
+    End Try
     Return False
 End Function
 
@@ -484,9 +569,9 @@ Sub PlaceWithoutList(drawDoc As DrawingDocument, sheet As Sheet, views As Dictio
     Dim sH As Double = (topEdge - orthoFloor - gap) / Math.Max(frontH + topH, 0.1)
     Dim sOrtho As Double = sW
     If sH < sOrtho Then sOrtho = sH
-    views("front").Scale = NiceScale(sOrtho * 0.96)
+    TrySetScale(views("front"), NiceScale(sOrtho * 0.96))
     Dim sIso As Double = ScaleToFit(isoW, isoH, rightEdge - split - 0.6, topEdge - isoFloor)
-    views("iso").Scale = NiceScale(sIso * 0.96)
+    TrySetScale(views("iso"), NiceScale(sIso * 0.96))
     QuietUpdate(drawDoc)
     Dim front As DrawingView = views("front")
     Dim topView As DrawingView = views("top")
@@ -526,10 +611,19 @@ Sub NudgeEachView(sheet As Sheet, views As Dictionary(Of String, DrawingView), t
     Do While index < names.Count
         Dim sheetView As DrawingView = views(names(index))
         If sheetView IsNot Nothing AndAlso sheetView.Position IsNot Nothing Then
-            Dim left As Double = sheetView.Position.X - sheetView.Width / 2
-            Dim right As Double = sheetView.Position.X + sheetView.Width / 2
-            Dim low As Double = sheetView.Position.Y - sheetView.Height / 2
-            Dim high As Double = sheetView.Position.Y + sheetView.Height / 2
+            Dim left As Double = 0
+            Dim right As Double = 0
+            Dim low As Double = 0
+            Dim high As Double = 0
+            Try
+                left = sheetView.Position.X - sheetView.Width / 2
+                right = sheetView.Position.X + sheetView.Width / 2
+                low = sheetView.Position.Y - sheetView.Height / 2
+                high = sheetView.Position.Y + sheetView.Height / 2
+            Catch
+                index = index + 1
+                Continue Do
+            End Try
             Dim moveX As Double = 0
             Dim moveY As Double = 0
             If hasList AndAlso RangesHit(left, low, right, high, listL, listB, listR, listT, 0.12) Then
