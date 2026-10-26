@@ -185,16 +185,16 @@ Sub PositionViews(sheet As Sheet, views As Dictionary(Of String, DrawingView), t
     Dim gap As Double = 2.6
     Dim oL As Double = 0
     Dim oB As Double = 0
-    Dim oR As Double = 0
+    Dim zoneRight As Double = 0
     Dim oT As Double = 0
     Dim iL As Double = 0
     Dim iB As Double = 0
     Dim iR As Double = 0
     Dim iT As Double = 0
-    ZoneFrame(sheet, oL, oB, oR, oT, iL, iB, iR, iT)
+    ZoneFrame(sheet, oL, oB, zoneRight, oT, iL, iB, iR, iT)
     Dim orthoW As Double = front.Width + gap + side.Width
     Dim orthoH As Double = front.Height + gap + topView.Height
-    Dim placeLeft As Double = oL + ((oR - oL) - orthoW) / 2
+    Dim placeLeft As Double = oL + ((zoneRight - oL) - orthoW) / 2
     Dim placeBottom As Double = oB + ((oT - oB) - orthoH) / 2
     If placeLeft < oL Then placeLeft = oL
     If placeBottom < oB Then placeBottom = oB
@@ -246,7 +246,7 @@ Sub ShrinkToSheet(drawDoc As DrawingDocument, sheet As Sheet, views As Dictionar
     End Try
 End Sub
 
-Sub ZoneFrame(sheet As Sheet, ByRef oL As Double, ByRef oB As Double, ByRef oR As Double, ByRef oT As Double, ByRef iL As Double, ByRef iB As Double, ByRef iR As Double, ByRef iT As Double)
+Sub ZoneFrame(sheet As Sheet, ByRef oL As Double, ByRef oB As Double, ByRef zoneRight As Double, ByRef oT As Double, ByRef iL As Double, ByRef iB As Double, ByRef iR As Double, ByRef iT As Double)
     Dim leftLimit As Double = 0
     Dim bottomLimit As Double = 0
     Dim rightLimit As Double = 0
@@ -275,7 +275,7 @@ Sub ZoneFrame(sheet As Sheet, ByRef oL As Double, ByRef oB As Double, ByRef oR A
     If split > leftEdge + innerW * 0.7 Then split = leftEdge + innerW * 0.7
     If split < leftEdge + 4 Then split = leftEdge + innerW * 0.5
     oL = leftEdge
-    oR = split - 0.7
+    zoneRight = split - 0.7
     iL = split + 0.7
     iR = rightEdge
     oB = bottomEdge
@@ -285,10 +285,10 @@ Sub ZoneFrame(sheet As Sheet, ByRef oL As Double, ByRef oB As Double, ByRef oR A
     If hasList AndAlso listB - 0.8 < oT Then oT = listB - 0.8
     If hasList AndAlso listR > iL - 0.2 AndAlso listB - 0.8 < iT Then iT = listB - 0.8
     If hasTitle Then
-        If titleR > oL AndAlso titleL < oR AndAlso titleT + 0.5 > oB Then oB = titleT + 0.5
+        If titleR > oL AndAlso titleL < zoneRight AndAlso titleT + 0.5 > oB Then oB = titleT + 0.5
         If titleR > iL AndAlso titleL < iR AndAlso titleT + 0.5 > iB Then iB = titleT + 0.5
     End If
-    If oT - oB < 3 OrElse oR - oL < 3 Then
+    If oT - oB < 3 OrElse zoneRight - oL < 3 Then
         Dim stackL As Double = leftEdge
         If hasList AndAlso listR + 0.8 > stackL Then stackL = listR + 0.8
         Dim stackB As Double = bottomEdge
@@ -300,7 +300,7 @@ Sub ZoneFrame(sheet As Sheet, ByRef oL As Double, ByRef oB As Double, ByRef oR A
         iT = stackT
         iB = mid + 0.4
         oL = stackL
-        oR = rightEdge
+        zoneRight = rightEdge
         oT = mid - 0.4
         oB = stackB
     End If
@@ -315,15 +315,15 @@ Function LargestZoneScale(sheet As Sheet, views As Dictionary(Of String, Drawing
     Dim isoH As Double = SpanH(views("iso"))
     Dim oL As Double = 0
     Dim oB As Double = 0
-    Dim oR As Double = 0
+    Dim zoneRight As Double = 0
     Dim oT As Double = 0
     Dim iL As Double = 0
     Dim iB As Double = 0
     Dim iR As Double = 0
     Dim iT As Double = 0
-    ZoneFrame(sheet, oL, oB, oR, oT, iL, iB, iR, iT)
+    ZoneFrame(sheet, oL, oB, zoneRight, oT, iL, iB, iR, iT)
     Dim gap As Double = 2.6
-    Dim availOW As Double = oR - oL
+    Dim availOW As Double = zoneRight - oL
     Dim availOH As Double = oT - oB
     Dim availIW As Double = iR - iL
     Dim availIH As Double = iT - iB
