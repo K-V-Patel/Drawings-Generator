@@ -14,8 +14,9 @@
 ' its own part. It is shifted only enough to keep two balloons from
 ' sitting on each other, and it does not have to share a row or a column.
 ' On a part, the top view is left off. Front, side, and isometric each
-' get their own scale, sized to the open sheet, and the front and side
-' views are dimensioned from the profile edges as well as the overall size.
+' get their own scale, sized to the open sheet. A part view is dimensioned
+' with the overall size, each distinct wall thickness once, and one radius
+' or hole size. The steps between those are left off.
 '
 ' The drawing is saved as the part number .idw in the sibling Drawing
 ' folder when that folder exists, otherwise beside the model. An existing
@@ -1391,20 +1392,12 @@ Sub NoteCurveStations(curve As DrawingCurve, curveIndex As Integer, xs As List(O
         typeName = curve.CurveType.ToString()
     Catch
     End Try
-    If typeName.Contains("Circle") AndAlso Not typeName.Contains("Arc") Then
-        Try
-            Dim centerPt As Point2d = curve.CenterPoint
-            If centerPt IsNot Nothing Then
-                KeepStation(centerPt.X, curveIndex, 3, xs, xOwners, xKinds)
-                KeepStation(centerPt.Y, curveIndex, 3, ys, yOwners, yKinds)
-            End If
-        Catch
-        End Try
-        Return
-    End If
+    ' A fillet or a hole is called out once as a radius or a diameter.
+    ' Using those points as linear stations chops the wall into leftover sizes.
+    If typeName.Contains("Arc") OrElse typeName.Contains("Circle") OrElse typeName.Contains("Ellipse") OrElse typeName.Contains("Spline") Then Return
+    If Not typeName.Contains("Line") Then Return
     NoteOneEnd(curve, curveIndex, 0, xs, xOwners, xKinds, ys, yOwners, yKinds)
     NoteOneEnd(curve, curveIndex, 1, xs, xOwners, xKinds, ys, yOwners, yKinds)
-    NoteOneEnd(curve, curveIndex, 2, xs, xOwners, xKinds, ys, yOwners, yKinds)
 End Sub
 
 Sub NoteOneEnd(curve As DrawingCurve, curveIndex As Integer, kind As Integer, xs As List(Of Double), xOwners As List(Of Integer), xKinds As List(Of Integer), ys As List(Of Double), yOwners As List(Of Integer), yKinds As List(Of Integer))
@@ -1455,86 +1448,79 @@ Sub OrderStations(values As List(Of Double), owners As List(Of Integer), kinds A
     Loop
 End Sub
 
-Function PickStations(values As List(Of Double)) As List(Of Integer)
-    Dim picked As New List(Of Integer)
-    If values.Count = 0 Then Return picked
-    picked.Add(0)
-    Dim lastValue As Double = values(0)
-    Dim i As Integer = 1
-    Do While i < values.Count
-        Dim gapHere As Double = values(i) - lastValue
-        If gapHere >= 0.16 OrElse i = values.Count - 1 Then
-            picked.Add(i)
-            lastValue = values(i)
-        End If
-        i = i + 1
-    Loop
-    If picked(picked.Count - 1) <> values.Count - 1 Then picked.Add(values.Count - 1)
-    Dim guard As Integer = 0
-    Do While picked.Count > 8 AndAlso guard < 40
-        If picked.Count < 3 Then Exit Do
-        Dim smallest As Double = 1.0E+30
-        Dim dropAt As Integer = 1
-        Dim p As Integer = 1
-        Do While p < picked.Count - 1
-            Dim gapLeft As Double = values(picked(p)) - values(picked(p - 1))
-            Dim gapNext As Double = values(picked(p + 1)) - values(picked(p))
-            Dim nearGap As Double = gapLeft
-            If gapNext < nearGap Then nearGap = gapNext
-            If nearGap < smallest Then
-                smallest = nearGap
-                dropAt = p
-            End If
-            p = p + 1
-        Loop
-        picked.RemoveAt(dropAt)
-        guard = guard + 1
-    Loop
-    Return picked
-End Function
-
-Function OpenLevel(usedL As List(Of Double), usedR As List(Of Double), usedLevel As List(Of Integer), leftEdge As Double, rightEdge As Double) As Integer
-    Dim levelIndex As Integer = 0
-    Do While levelIndex < 4
-        Dim blocked As Boolean = False
-        Dim i As Integer = 0
-        Do While i < usedL.Count
-            If usedLevel(i) = levelIndex Then
-                If rightEdge > usedL(i) - 0.2 AndAlso leftEdge < usedR(i) + 0.2 Then
-                    blocked = True
-                    Exit Do
-                End If
-            End If
-            i = i + 1
-        Loop
-        If Not blocked Then Return levelIndex
-        levelIndex = levelIndex + 1
-    Loop
-    Return 3
+Function SameMeasure(a As Double, b As Double) As Boolean
+    Dim delta As Double = a - b
+    If delta < 0 Then delta = -delta
+    If delta < 0.04 Then Return True
+    Dim bigger As Double = a
+    If b > bigger Then bigger = b
+    If bigger > 0 AndAlso delta / bigger < 0.08 Then Return True
+    Return False
 End Function
 
 Sub DimensionDirection(sheet As Sheet, view As DrawingView, tg As TransientGeometry, curves As List(Of DrawingCurve), values As List(Of Double), owners As List(Of Integer), kinds As List(Of Integer), horizontal As Boolean)
     Try
         If values.Count < 2 Then Return
         OrderStations(values, owners, kinds)
-        Dim picked As List(Of Integer) = PickStations(values)
-        If picked.Count < 2 Then Return
-        Dim usedL As New List(Of Double)
-        Dim usedR As New List(Of Double)
-        Dim usedLevel As New List(Of Integer)
-        Dim seg As Integer = 0
-        Do While seg < picked.Count - 1
-            PlaceStationDim(sheet, view, tg, curves, values, owners, kinds, picked(seg), picked(seg + 1), usedL, usedR, usedLevel, horizontal)
-            seg = seg + 1
+        Dim lastIdx As Integer = values.Count - 1
+        Dim overall As Double = values(lastIdx) - values(0)
+        If overall < 0.2 Then Return
+        ' The overall size is always a main dimension. It sits outside the thickness.
+        PlaceStationDim(sheet, view, tg, curves, values, owners, kinds, 0, lastIdx, 1, horizontal)
+        ' A wall thickness is a gap much smaller than the overall. The matching
+        ' wall on the other side is the same size, so it is called out once.
+        Dim gapStart As New List(Of Integer)
+        Dim gapSpan As New List(Of Double)
+        Dim i As Integer = 0
+        Do While i < lastIdx
+            Dim span As Double = values(i + 1) - values(i)
+            If span >= 0.08 AndAlso span <= overall * 0.25 Then
+                gapStart.Add(i)
+                gapSpan.Add(span)
+            End If
+            i = i + 1
         Loop
-        If picked.Count > 2 Then
-            PlaceStationDim(sheet, view, tg, curves, values, owners, kinds, picked(0), picked(picked.Count - 1), usedL, usedR, usedLevel, horizontal)
-        End If
+        Dim usedGap As New List(Of Boolean)
+        Dim g As Integer = 0
+        Do While g < gapSpan.Count
+            usedGap.Add(False)
+            g = g + 1
+        Loop
+        Dim keptA As Double = -1
+        Dim keptB As Double = -1
+        Dim keptCount As Integer = 0
+        Dim pickGuard As Integer = 0
+        Do While keptCount < 2 AndAlso pickGuard < gapSpan.Count
+            Dim best As Integer = -1
+            Dim bestSpan As Double = 1.0E+30
+            g = 0
+            Do While g < gapSpan.Count
+                If Not usedGap(g) Then
+                    If gapSpan(g) < bestSpan Then
+                        bestSpan = gapSpan(g)
+                        best = g
+                    End If
+                End If
+                g = g + 1
+            Loop
+            If best < 0 Then Exit Do
+            usedGap(best) = True
+            Dim fresh As Boolean = True
+            If keptCount > 0 AndAlso SameMeasure(bestSpan, keptA) Then fresh = False
+            If keptCount > 1 AndAlso SameMeasure(bestSpan, keptB) Then fresh = False
+            If fresh Then
+                PlaceStationDim(sheet, view, tg, curves, values, owners, kinds, gapStart(best), gapStart(best) + 1, 0, horizontal)
+                If keptCount = 0 Then keptA = bestSpan
+                If keptCount = 1 Then keptB = bestSpan
+                keptCount = keptCount + 1
+            End If
+            pickGuard = pickGuard + 1
+        Loop
     Catch
     End Try
 End Sub
 
-Sub PlaceStationDim(sheet As Sheet, view As DrawingView, tg As TransientGeometry, curves As List(Of DrawingCurve), values As List(Of Double), owners As List(Of Integer), kinds As List(Of Integer), indexA As Integer, indexB As Integer, usedL As List(Of Double), usedR As List(Of Double), usedLevel As List(Of Integer), horizontal As Boolean)
+Sub PlaceStationDim(sheet As Sheet, view As DrawingView, tg As TransientGeometry, curves As List(Of DrawingCurve), values As List(Of Double), owners As List(Of Integer), kinds As List(Of Integer), indexA As Integer, indexB As Integer, levelIndex As Integer, horizontal As Boolean)
     Try
         If view Is Nothing OrElse view.Position Is Nothing Then Return
         If indexA < 0 OrElse indexB < 0 OrElse indexA >= values.Count OrElse indexB >= values.Count Then Return
@@ -1543,28 +1529,15 @@ Sub PlaceStationDim(sheet As Sheet, view As DrawingView, tg As TransientGeometry
         Dim valueB As Double = values(indexB)
         Dim span As Double = valueB - valueA
         If span < 0 Then span = -span
-        If span < 0.1 Then Return
+        If span < 0.08 Then Return
         If owners(indexA) < 0 OrElse owners(indexA) >= curves.Count Then Return
         If owners(indexB) < 0 OrElse owners(indexB) >= curves.Count Then Return
         Dim intentA As GeometryIntent = CurveIntent(sheet, curves(owners(indexA)), kinds(indexA))
         Dim intentB As GeometryIntent = CurveIntent(sheet, curves(owners(indexB)), kinds(indexB))
         If intentA Is Nothing OrElse intentB Is Nothing Then Return
-        Dim leftEdge As Double = valueA
-        Dim rightEdge As Double = valueB
-        If rightEdge < leftEdge Then
-            leftEdge = valueB
-            rightEdge = valueA
-        End If
-        Dim midEdge As Double = (leftEdge + rightEdge) / 2
-        If rightEdge - leftEdge < 1.5 Then
-            leftEdge = midEdge - 0.75
-            rightEdge = midEdge + 0.75
-        End If
-        Dim levelIndex As Integer = OpenLevel(usedL, usedR, usedLevel, leftEdge, rightEdge)
-        usedL.Add(leftEdge)
-        usedR.Add(rightEdge)
-        usedLevel.Add(levelIndex)
-        Dim offset As Double = 1.15 + levelIndex * 0.72
+        Dim midEdge As Double = (valueA + valueB) / 2
+        Dim offset As Double = 1.25
+        If levelIndex > 0 Then offset = 2.55
         Dim textPoint As Point2d
         Dim dimKind As DimensionTypeEnum
         If horizontal Then
@@ -1600,17 +1573,32 @@ End Function
 
 Sub AddRoundSizes(sheet As Sheet, view As DrawingView, tg As TransientGeometry)
     If view Is Nothing OrElse view.Position Is Nothing Then Return
-    Dim count As Integer = 0
+    Dim arcCount As Integer = 0
+    Dim holeCount As Integer = 0
+    Dim keptRadius As New List(Of Double)
     Try
         For Each curve As DrawingCurve In view.DrawingCurves
-            If count >= 6 Then Exit For
+            If arcCount >= 1 AndAlso holeCount >= 1 Then Exit For
             Dim typeName As String = ""
             Try
                 typeName = curve.CurveType.ToString()
             Catch
             End Try
+            Dim fullCircle As Boolean = typeName.Contains("Circle") AndAlso Not typeName.Contains("Arc")
+            Dim arcCurve As Boolean = typeName.Contains("Arc")
+            If Not fullCircle AndAlso Not arcCurve Then Continue For
+            If fullCircle AndAlso holeCount >= 1 Then Continue For
+            If arcCurve AndAlso arcCount >= 1 Then Continue For
             Dim radius As Double = CurveRadius(curve)
-            If radius < 0.18 Then Continue For
+            If radius < 0.08 Then Continue For
+            If arcCurve AndAlso radius > view.Width * 0.45 AndAlso radius > view.Height * 0.45 Then Continue For
+            Dim seen As Boolean = False
+            Dim r As Integer = 0
+            Do While r < keptRadius.Count
+                If SameMeasure(keptRadius(r), radius) Then seen = True
+                r = r + 1
+            Loop
+            If seen Then Continue For
             Dim centerPt As Point2d = Nothing
             Try
                 centerPt = curve.CenterPoint
@@ -1618,7 +1606,7 @@ Sub AddRoundSizes(sheet As Sheet, view As DrawingView, tg As TransientGeometry)
                 centerPt = Nothing
             End Try
             If centerPt Is Nothing Then Continue For
-            Dim textPoint As Point2d = tg.CreatePoint2d(centerPt.X + radius + 1.05, centerPt.Y + 0.35 + count * 0.55)
+            Dim textPoint As Point2d = tg.CreatePoint2d(centerPt.X + radius + 1.05, centerPt.Y + 0.45)
             Dim intent As GeometryIntent = Nothing
             Try
                 intent = sheet.CreateGeometryIntent(curve)
@@ -1626,20 +1614,17 @@ Sub AddRoundSizes(sheet As Sheet, view As DrawingView, tg As TransientGeometry)
                 intent = Nothing
             End Try
             If intent Is Nothing Then Continue For
-            If typeName.Contains("Circle") AndAlso Not typeName.Contains("Arc") Then
-                Try
+            Try
+                If fullCircle Then
                     sheet.DrawingDimensions.GeneralDimensions.AddDiameter(textPoint, intent)
-                    count = count + 1
-                Catch
-                End Try
-            ElseIf typeName.Contains("Arc") Then
-                If radius > view.Width * 0.45 AndAlso radius > view.Height * 0.45 Then Continue For
-                Try
+                    holeCount = holeCount + 1
+                Else
                     sheet.DrawingDimensions.GeneralDimensions.AddRadius(textPoint, intent)
-                    count = count + 1
-                Catch
-                End Try
-            End If
+                    arcCount = arcCount + 1
+                End If
+                keptRadius.Add(radius)
+            Catch
+            End Try
         Next
     Catch
     End Try
