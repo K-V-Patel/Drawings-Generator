@@ -4,11 +4,10 @@
 ' Creates a drawing from TemplateName, so the border, title block, and
 ' dimension style are the Inventor template. The front view follows the
 ' model ViewCube. Top and side are projected from that front view so they
-' stay aligned. The isometric view uses the model Home view. Views are
-' drawn at 1/50 when that scale fits the sheet, then moved so the views,
-' dimensions, and balloons stay inside the border and do not cover each
-' other or the title block. Overall dimensions are added on the
-' orthographic views.
+' stay aligned. The isometric view uses the model Home view. The parts
+' list stays in the top-left. Front, top, and side fill the space below
+' it, and the isometric view fills the right side, at the largest scale
+' that fits. Overall dimensions are added on the orthographic views.
 ' An assembly parts list sits in the top-left corner. Item, quantity,
 ' and part number columns are sized to their text. When the assembly has
 ' more than one part, each part gets one balloon just outside that part
@@ -183,60 +182,22 @@ Sub PositionViews(sheet As Sheet, views As Dictionary(Of String, DrawingView), t
     Dim side As DrawingView = views("side")
     Dim iso As DrawingView = views("iso")
     iso.Scale = front.Scale
-    Dim gap As Double = 3.4
-    Dim leftLimit As Double = 0
-    Dim bottomLimit As Double = 0
-    Dim rightLimit As Double = 0
-    Dim topLimit As Double = 0
-    BorderLimits(sheet, leftLimit, bottomLimit, rightLimit, topLimit)
-    Dim viewPad As Double = 2.6
-    Dim leftEdge As Double = leftLimit + viewPad
-    Dim bottomEdge As Double = bottomLimit + viewPad
-    Dim rightEdge As Double = rightLimit - viewPad
-    Dim topEdge As Double = topLimit - viewPad
-    Dim listL As Double = 0
-    Dim listB As Double = 0
-    Dim listR As Double = 0
-    Dim listT As Double = 0
-    Dim hasList As Boolean = False
-    Dim titleL As Double = 0
-    Dim titleB As Double = 0
-    Dim titleR As Double = 0
-    Dim titleT As Double = 0
-    Dim hasTitle As Boolean = False
-    ReadOccupied(sheet, listL, listB, listR, listT, hasList, titleL, titleB, titleR, titleT, hasTitle)
+    Dim gap As Double = 2.6
+    Dim oL As Double = 0
+    Dim oB As Double = 0
+    Dim oR As Double = 0
+    Dim oT As Double = 0
+    Dim iL As Double = 0
+    Dim iB As Double = 0
+    Dim iR As Double = 0
+    Dim iT As Double = 0
+    ZoneFrame(sheet, oL, oB, oR, oT, iL, iB, iR, iT)
     Dim orthoW As Double = front.Width + gap + side.Width
     Dim orthoH As Double = front.Height + gap + topView.Height
-    Dim placeLeft As Double = leftEdge
-    Dim placeBottom As Double = bottomEdge
-    Dim underList As Boolean = True
-    If hasList Then
-        Dim roomUnder As Double = listB - gap - bottomEdge
-        Dim roomRight As Double = rightEdge - (listR + gap)
-        If orthoH <= roomUnder Then
-            underList = True
-        ElseIf orthoW <= roomRight Then
-            underList = False
-            placeLeft = listR + gap
-        Else
-            underList = True
-        End If
-    End If
-    If hasTitle Then
-        Dim orthoRight As Double = placeLeft + orthoW
-        If orthoRight > titleL - 0.6 AndAlso placeBottom < titleT Then
-            Dim raised As Double = titleT + 0.8
-            Dim ceiling As Double = topEdge
-            If hasList AndAlso underList Then ceiling = listB - gap
-            If raised + orthoH <= ceiling Then placeBottom = raised
-        End If
-    End If
-    If hasList AndAlso underList Then
-        Dim listCeiling As Double = listB - gap
-        If placeBottom + orthoH > listCeiling Then placeBottom = listCeiling - orthoH
-    End If
-    If placeBottom < bottomEdge Then placeBottom = bottomEdge
-    If placeLeft < leftEdge Then placeLeft = leftEdge
+    Dim placeLeft As Double = oL + ((oR - oL) - orthoW) / 2
+    Dim placeBottom As Double = oB + ((oT - oB) - orthoH) / 2
+    If placeLeft < oL Then placeLeft = oL
+    If placeBottom < oB Then placeBottom = oB
     Dim frontX As Double = placeLeft + front.Width / 2
     Dim frontY As Double = placeBottom + front.Height / 2
     Dim sideX As Double = placeLeft + front.Width + gap + side.Width / 2
@@ -246,22 +207,12 @@ Sub PositionViews(sheet As Sheet, views As Dictionary(Of String, DrawingView), t
     TryMove(front, tg.CreatePoint2d(frontX, frontY))
     TryMove(topView, tg.CreatePoint2d(topX, topY))
     TryMove(side, tg.CreatePoint2d(sideX, sideY))
-    Dim isoLeft As Double = placeLeft + orthoW + gap
-    Dim isoBottom As Double = bottomEdge
-    Dim isoTop As Double = topEdge
-    If hasTitle AndAlso titleT + 0.8 > isoBottom Then isoBottom = titleT + 0.8
-    If hasList AndAlso isoLeft < listR Then
-        Dim capTop As Double = listB - gap
-        If capTop < isoTop Then isoTop = capTop
-    End If
-    Dim isoX As Double = rightEdge - iso.Width / 2
-    If isoX - iso.Width / 2 < isoLeft Then isoX = isoLeft + iso.Width / 2
-    Dim isoY As Double = isoTop - iso.Height / 2
-    If isoY - iso.Height / 2 < isoBottom Then isoY = isoBottom + iso.Height / 2
-    If isoX > rightEdge - iso.Width / 2 Then isoX = rightEdge - iso.Width / 2
-    If isoY > topEdge - iso.Height / 2 Then isoY = topEdge - iso.Height / 2
-    If isoX < leftEdge + iso.Width / 2 Then isoX = leftEdge + iso.Width / 2
-    If isoY < bottomEdge + iso.Height / 2 Then isoY = bottomEdge + iso.Height / 2
+    Dim isoX As Double = (iL + iR) / 2
+    Dim isoY As Double = (iB + iT) / 2
+    If isoX - iso.Width / 2 < iL Then isoX = iL + iso.Width / 2
+    If isoX + iso.Width / 2 > iR Then isoX = iR - iso.Width / 2
+    If isoY - iso.Height / 2 < iB Then isoY = iB + iso.Height / 2
+    If isoY + iso.Height / 2 > iT Then isoY = iT - iso.Height / 2
     TryMove(iso, tg.CreatePoint2d(isoX, isoY))
 End Sub
 
@@ -273,14 +224,17 @@ Sub TryMove(view As DrawingView, point As Point2d)
 End Sub
 
 Sub ShrinkToSheet(drawDoc As DrawingDocument, sheet As Sheet, views As Dictionary(Of String, DrawingView), tg As TransientGeometry)
+    QuietUpdate(drawDoc)
+    views("front").Scale = LargestZoneScale(sheet, views)
+    views("iso").Scale = views("front").Scale
     Dim pass As Integer = 1
     Do While pass <= 4
         QuietUpdate(drawDoc)
         PositionViews(sheet, views, tg)
         QuietUpdate(drawDoc)
-        Dim factor As Double = LayoutPressure(sheet, views)
-        If factor <= 1.04 Then Exit Do
-        views("front").Scale = NiceScale(views("front").Scale / factor)
+        If LayoutPressure(sheet, views) <= 1.05 Then Exit Do
+        views("front").Scale = NextSmallerScale(views("front").Scale)
+        views("iso").Scale = views("front").Scale
         pass = pass + 1
     Loop
     QuietUpdate(drawDoc)
@@ -291,6 +245,122 @@ Sub ShrinkToSheet(drawDoc As DrawingDocument, sheet As Sheet, views As Dictionar
     Catch
     End Try
 End Sub
+
+Sub ZoneFrame(sheet As Sheet, ByRef oL As Double, ByRef oB As Double, ByRef oR As Double, ByRef oT As Double, ByRef iL As Double, ByRef iB As Double, ByRef iR As Double, ByRef iT As Double)
+    Dim leftLimit As Double = 0
+    Dim bottomLimit As Double = 0
+    Dim rightLimit As Double = 0
+    Dim topLimit As Double = 0
+    BorderLimits(sheet, leftLimit, bottomLimit, rightLimit, topLimit)
+    Dim pad As Double = 1.4
+    Dim leftEdge As Double = leftLimit + pad
+    Dim bottomEdge As Double = bottomLimit + pad
+    Dim rightEdge As Double = rightLimit - pad
+    Dim topEdge As Double = topLimit - pad
+    Dim listL As Double = 0
+    Dim listB As Double = 0
+    Dim listR As Double = 0
+    Dim listT As Double = 0
+    Dim hasList As Boolean = False
+    Dim titleL As Double = 0
+    Dim titleB As Double = 0
+    Dim titleR As Double = 0
+    Dim titleT As Double = 0
+    Dim hasTitle As Boolean = False
+    ReadOccupied(sheet, listL, listB, listR, listT, hasList, titleL, titleB, titleR, titleT, hasTitle)
+    Dim innerW As Double = rightEdge - leftEdge
+    If innerW < 8 Then innerW = 8
+    Dim split As Double = leftEdge + innerW * 0.56
+    If hasList AndAlso listR + 1.0 > split Then split = listR + 1.0
+    If split > leftEdge + innerW * 0.7 Then split = leftEdge + innerW * 0.7
+    If split < leftEdge + 4 Then split = leftEdge + innerW * 0.5
+    oL = leftEdge
+    oR = split - 0.7
+    iL = split + 0.7
+    iR = rightEdge
+    oB = bottomEdge
+    iB = bottomEdge
+    oT = topEdge
+    iT = topEdge
+    If hasList AndAlso listB - 0.8 < oT Then oT = listB - 0.8
+    If hasList AndAlso listR > iL - 0.2 AndAlso listB - 0.8 < iT Then iT = listB - 0.8
+    If hasTitle Then
+        If titleR > oL AndAlso titleL < oR AndAlso titleT + 0.5 > oB Then oB = titleT + 0.5
+        If titleR > iL AndAlso titleL < iR AndAlso titleT + 0.5 > iB Then iB = titleT + 0.5
+    End If
+    If oT - oB < 3 OrElse oR - oL < 3 Then
+        Dim stackL As Double = leftEdge
+        If hasList AndAlso listR + 0.8 > stackL Then stackL = listR + 0.8
+        Dim stackB As Double = bottomEdge
+        Dim stackT As Double = topEdge
+        If hasTitle AndAlso titleL < rightEdge AndAlso titleT + 0.5 > stackB Then stackB = titleT + 0.5
+        Dim mid As Double = (stackB + stackT) / 2
+        iL = stackL
+        iR = rightEdge
+        iT = stackT
+        iB = mid + 0.4
+        oL = stackL
+        oR = rightEdge
+        oT = mid - 0.4
+        oB = stackB
+    End If
+End Sub
+
+Function LargestZoneScale(sheet As Sheet, views As Dictionary(Of String, DrawingView)) As Double
+    Dim frontW As Double = SpanW(views("front"))
+    Dim frontH As Double = SpanH(views("front"))
+    Dim topH As Double = SpanH(views("top"))
+    Dim sideW As Double = SpanW(views("side"))
+    Dim isoW As Double = SpanW(views("iso"))
+    Dim isoH As Double = SpanH(views("iso"))
+    Dim oL As Double = 0
+    Dim oB As Double = 0
+    Dim oR As Double = 0
+    Dim oT As Double = 0
+    Dim iL As Double = 0
+    Dim iB As Double = 0
+    Dim iR As Double = 0
+    Dim iT As Double = 0
+    ZoneFrame(sheet, oL, oB, oR, oT, iL, iB, iR, iT)
+    Dim gap As Double = 2.6
+    Dim availOW As Double = oR - oL
+    Dim availOH As Double = oT - oB
+    Dim availIW As Double = iR - iL
+    Dim availIH As Double = iT - iB
+    If availOW < 3 Then availOW = 3
+    If availOH < 3 Then availOH = 3
+    If availIW < 3 Then availIW = 3
+    If availIH < 3 Then availIH = 3
+    Dim sOrthoW As Double = (availOW - gap) / Math.Max(frontW + sideW, 0.1)
+    Dim sOrthoH As Double = (availOH - gap) / Math.Max(frontH + topH, 0.1)
+    Dim sIsoW As Double = (availIW - 1.8) / Math.Max(isoW, 0.1)
+    Dim sIsoH As Double = (availIH - 1.8) / Math.Max(isoH, 0.1)
+    Dim s As Double = sOrthoW
+    If sOrthoH < s Then s = sOrthoH
+    If sIsoW < s Then s = sIsoW
+    If sIsoH < s Then s = sIsoH
+    s = s * 0.94
+    If s < 0.005 Then s = 0.005
+    Return NiceScale(s)
+End Function
+
+Function SpanW(view As DrawingView) As Double
+    If view Is Nothing Then Return 1
+    Return view.Width / Math.Max(view.Scale, 0.0001)
+End Function
+
+Function SpanH(view As DrawingView) As Double
+    If view Is Nothing Then Return 1
+    Return view.Height / Math.Max(view.Scale, 0.0001)
+End Function
+
+Function NextSmallerScale(current As Double) As Double
+    Dim choices() As Double = {2, 1, 0.5, 0.25, 0.2, 0.1, 1.0 / 12, 1.0 / 16, 0.05, 1.0 / 20, 1.0 / 24, 1.0 / 30, 1.0 / 32, 0.025, 0.02, 1.0 / 48, 1.0 / 50, 1.0 / 64, 0.01, 0.005}
+    For Each choice As Double In choices
+        If choice < current * 0.98 Then Return choice
+    Next
+    Return 0.005
+End Function
 
 Sub BorderLimits(sheet As Sheet, ByRef leftLimit As Double, ByRef bottomLimit As Double, ByRef rightLimit As Double, ByRef topLimit As Double)
     leftLimit = 1.6
@@ -357,7 +427,7 @@ Function LayoutPressure(sheet As Sheet, views As Dictionary(Of String, DrawingVi
     Dim rightLimit As Double = 0
     Dim topLimit As Double = 0
     BorderLimits(sheet, leftLimit, bottomLimit, rightLimit, topLimit)
-    Dim viewPad As Double = 2.2
+    Dim viewPad As Double = 0.8
     Dim leftEdge As Double = leftLimit + viewPad
     Dim bottomEdge As Double = bottomLimit + viewPad
     Dim rightEdge As Double = rightLimit - viewPad
@@ -543,10 +613,10 @@ Sub TryAddOverall(sheet As Sheet, view As DrawingView, horizontal As Boolean, tg
         Dim textPoint As Point2d
         Dim kind As DimensionTypeEnum
         If horizontal Then
-            textPoint = tg.CreatePoint2d((minValue + maxValue) / 2, view.Position.Y - view.Height / 2 - 2.3)
+            textPoint = tg.CreatePoint2d((minValue + maxValue) / 2, view.Position.Y - view.Height / 2 - 1.8)
             kind = DimensionTypeEnum.kHorizontalDimensionType
         Else
-            textPoint = tg.CreatePoint2d(view.Position.X - view.Width / 2 - 2.0, (minValue + maxValue) / 2)
+            textPoint = tg.CreatePoint2d(view.Position.X - view.Width / 2 - 1.6, (minValue + maxValue) / 2)
             kind = DimensionTypeEnum.kVerticalDimensionType
         End If
         sheet.DrawingDimensions.GeneralDimensions.AddLinear(textPoint, sheet.CreateGeometryIntent(minCurve), sheet.CreateGeometryIntent(maxCurve), kind)
@@ -667,7 +737,7 @@ Sub ShrinkWideColumns(sheet As Sheet, table As PartsList)
         Dim topLimit As Double = 0
         BorderLimits(sheet, leftLimit, bottomLimit, rightLimit, topLimit)
         Dim maxWidth As Double = rightLimit - leftLimit
-        If maxWidth > sheet.Width * 0.46 Then maxWidth = sheet.Width * 0.46
+        If maxWidth > sheet.Width * 0.42 Then maxWidth = sheet.Width * 0.42
         Dim tableWidth As Double = box.MaxPoint.X - box.MinPoint.X
         If tableWidth <= maxWidth Then Return
         Dim overflow As Double = tableWidth - maxWidth
@@ -903,7 +973,7 @@ Function TipOutside(sheet As Sheet, host As DrawingView, minX As Double, minY As
     End If
     Dim dx As Double = px - vx
     Dim dy As Double = py - vy
-    Dim reach As Double = 0.85
+    Dim reach As Double = 0.55
     Dim tipX As Double = px
     Dim tipY As Double = py
     If Math.Abs(dx) >= Math.Abs(dy) Then
