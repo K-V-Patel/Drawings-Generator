@@ -1,32 +1,31 @@
 ' CreateDrawing.vb
 ' iLogic rule. Run it from an open part (.ipt) or assembly (.iam).
+' The drawing stays open. It is not saved, and no .drawgen.json is written.
 '
-' Creates a drawing from TemplateName, so the border, title block, and
-' dimension style are the Inventor template. The front view follows the
-' model ViewCube. On an assembly, top and side are projected from that
-' front view and share one scale. The parts list sits on the top-left
-' corner. Its columns follow that assembly's text, and the description
-' column grows or shrinks so the table leaves room for the views. The
-' isometric view has its own scale. Views are moved into the open areas
-' of the sheet. Overall dimensions are added on the orthographic views.
-' When the assembly has more than one part, each part gets one balloon
-' just outside that part on the isometric view. A balloon stays next to
-' its own part. It is shifted only enough to keep two balloons from
-' sitting on each other, and it does not have to share a row or a column.
-' On a part, the top view is left off. Front and side share one scale.
-' The side is a projected view from the front when Inventor allows it,
-' placed to the right on the same centerline. The isometric view has its
-' own scale and takes the space that is left. A part
-' view is dimensioned with
-' the overall size, each distinct wall thickness once, and one radius or
-' hole size. The steps between those are left off.
+' What a person usually changes:
+'   TemplateName          file name in the Inventor template folder, or a full path.
+'   SeriesFontIn          project series text height, in inches. Used only when
+'                         Standard1.idw is not in the template folder.
+'   The view style line   hidden line removed, hidden line, or shaded. See Main.
+'   NiceScale             allowed sheet scales. 1 is full size, 0.1 is 1/10, 0.02 is 1/50.
+'   PlaceAlignedPart      reserveX, reserveY, and gap. Room left for part dimensions.
+'   TipOutside            how far an item balloon sits from its part.
+'   FitPartsListColumns   smallest and largest parts-list column widths.
+'   DimensionDirection    which gaps count as a wall thickness.
 '
-' The drawing stays open in Inventor. It is not saved automatically.
-' No .drawgen.json is written.
-' Standard1.idw, when it is in the template folder, supplies the title
-' block so the description fits and the project series keeps that font.
-' Without that file, the description is scaled into its box and the
-' series font uses SeriesFontIn.
+' Sheet distances below are centimeters, because that is Inventor's internal unit.
+' 2.54 cm is 1 inch.
+'
+' Behavior, so a later edit does not undo it:
+'   Assemblies get front, top, side, and iso. Top and side are projected from
+'   the front. The parts list sits on the top-left corner. One balloon per
+'   parts-list row, and only when the assembly has more than one part.
+'   Parts get front, side, and iso. No top view, no parts list, no balloons.
+'   Front and side share one scale and one centerline, side to the right.
+'   Iso keeps its own scale. A part is dimensioned with the overall size,
+'   each distinct wall thickness once, and one radius or one hole.
+'   Standard1.idw, when found, supplies the title block so the description
+'   fits and the project series keeps that file's font.
 '
 ' iLogic misreads a quote typed inside a string, so every quote is Chr(34).
 
@@ -66,6 +65,10 @@ Sub Main()
         Dim sheet As Sheet = drawDoc.ActiveSheet
         ApplyStandard1Title(app, drawDoc, sheet, SeriesFontIn)
         Dim tg As TransientGeometry = app.TransientGeometry
+        ' View style for every view. Swap the name after the dot:
+        '   kHiddenLineRemovedDrawingViewStyle   hidden lines off (current)
+        '   kHiddenLineDrawingViewStyle          hidden lines shown
+        '   kShadedDrawingViewStyle              shaded
         Dim style As DrawingViewStyleEnum = DrawingViewStyleEnum.kHiddenLineRemovedDrawingViewStyle
         Dim assembly As Boolean = model.DocumentType = DocumentTypeEnum.kAssemblyDocumentObject
         Dim front As DrawingView = sheet.DrawingViews.AddBaseView( _
@@ -78,6 +81,9 @@ Sub Main()
 
         Dim views As New Dictionary(Of String, DrawingView)
         views("front") = front
+        ' Assemblies also get a top view. Parts do not.
+        ' False on the next line places the side to the right of the front.
+        ' Both are projected from the front when Inventor allows it.
         If assembly Then views("top") = AddChildView(sheet, front, model, tg, style, True)
         views("side") = AddChildView(sheet, front, model, tg, style, False)
         Dim isoView As DrawingView = AddIsoView(sheet, model, tg, style, front)
@@ -126,6 +132,10 @@ Sub Main()
 End Sub
 
 Function FindTemplate(templateFile As String) As String
+    ' A value with a backslash or a slash is used as a full path.
+    ' A file name is searched in the project template folder, then the
+    ' public Inventor 2025, 2026, and 2024 English template folders.
+    ' Add another candidates.Add line to search a different folder.
     If templateFile = "" Then Return ""
     If templateFile.Contains("\") OrElse templateFile.Contains("/") Then
         If System.IO.File.Exists(templateFile) Then Return templateFile
@@ -148,7 +158,9 @@ Function FindTemplate(templateFile As String) As String
 End Function
 
 Sub ApplyStandard1Title(app As Inventor.Application, drawDoc As DrawingDocument, sheet As Sheet, seriesIn As Double)
-    ' Standard.idw stays the sheet. Standard1.idw contributes its title block.
+    ' Copies the title block from Standard1.idw onto the sheet from Standard.idw.
+    ' That is what makes the description fit and keeps the project series font.
+    ' If Standard1.idw is missing, FitTitleText does a simpler version of the same job.
     Dim sourcePath As String = FindTemplate("Standard1.idw")
     If sourcePath = "" Then sourcePath = FindTemplate("Standard1.dwg")
     If sourcePath = "" Then
@@ -263,6 +275,7 @@ Sub FitTitleText(drawDoc As DrawingDocument, seriesIn As Double)
         For Each box As Inventor.TextBox In sketch.TextBoxes
             Dim probe As String = BoxProbe(box)
             If probe.Contains("description") Then
+                ' 0.07 is the smallest description text height, in inches.
                 ShrinkToBox(drawDoc, box, 0.07)
             ElseIf probe.Contains("series") Then
                 ApplyFontCm(drawDoc, box, seriesIn * 2.54, "SeriesFont")
@@ -444,6 +457,10 @@ Function AddIsoView(sheet As Sheet, model As Document, tg As TransientGeometry, 
 End Function
 
 Function NiceScale(exact As Double) As Double
+    ' Sheet scale choices, largest first. The first value that still fits is used.
+    ' 2 = 2/1, 1 = 1/1, 0.5 = 1/2, 0.1 = 1/10, 0.02 = 1/50, 0.01 = 1/100.
+    ' Add or remove a number here to change the scales the rule is allowed to pick.
+    ' Keep the list in descending order.
     Dim choices() As Double = {2, 1, 0.5, 0.25, 0.2, 0.1, 1.0 / 12, 1.0 / 15, 1.0 / 16, 0.05, 1.0 / 24, 1.0 / 30, 1.0 / 40, 0.02, 1.0 / 60, 1.0 / 70, 1.0 / 80, 0.01, 1.0 / 120, 0.005}
     If exact <= 0 Then Return 0.01
     For Each choice As Double In choices
@@ -567,6 +584,10 @@ Sub ShrinkToSheet(drawDoc As DrawingDocument, sheet As Sheet, views As Dictionar
 End Sub
 
 Sub PlaceAroundList(drawDoc As DrawingDocument, sheet As Sheet, views As Dictionary(Of String, DrawingView), tg As TransientGeometry, frontW As Double, frontH As Double, topW As Double, topH As Double, sideW As Double, sideH As Double, isoW As Double, isoH As Double)
+    ' Assembly sheet. The parts list owns the top-left, and the views fill
+    ' the open area. Alignment is released here on purpose so a view can
+    ' move off the projection line to clear the list. Leave that in place
+    ' when the assembly layout should stay as it is.
     ReleaseAlignment(views("top"))
     ReleaseAlignment(views("side"))
     Dim spansW As New Dictionary(Of String, Double)
@@ -838,6 +859,10 @@ Sub PlaceAlignedPart(drawDoc As DrawingDocument, sheet As Sheet, views As Dictio
     Dim usableH As Double = topEdge - bottomEdge
     If innerW < 8 Then innerW = 8
     If usableH < 8 Then usableH = 8
+    ' Centimeters of clear sheet. Raise these if dimensions or the view
+    ' name collide with the part. Lower them to let the views grow.
+    ' reserveX is left of the front view, reserveY is under the pair,
+    ' labelRoom is above the view name, gap is between front and side.
     Dim reserveX As Double = 3.2
     Dim reserveY As Double = 2.6
     Dim labelRoom As Double = 1.15
@@ -854,6 +879,9 @@ Sub PlaceAlignedPart(drawDoc As DrawingDocument, sheet As Sheet, views As Dictio
     Else
         gap = 0
     End If
+    ' 0.62 means the front and side pair may use 62 percent of the sheet width,
+    ' with the iso view in the rest. The upper band for a long part is 55
+    ' percent of the height (the floor below is at 45 percent).
     Dim leftW As Double = innerW * 0.62
     Dim scaleA As Double = SheetFit(spanW, spanH, gap, reserveX, reserveY, labelRoom, leftW, usableH)
     If hasSide AndAlso hasTitle Then
@@ -1318,6 +1346,7 @@ Function SpanH(view As DrawingView) As Double
 End Function
 
 Function NextSmallerScale(current As Double) As Double
+    ' Keep this list the same as NiceScale, and in the same order.
     Dim choices() As Double = {2, 1, 0.5, 0.25, 0.2, 0.1, 1.0 / 12, 1.0 / 15, 1.0 / 16, 0.05, 1.0 / 24, 1.0 / 30, 1.0 / 40, 0.02, 1.0 / 60, 1.0 / 70, 1.0 / 80, 0.01, 1.0 / 120, 0.005}
     For Each choice As Double In choices
         If choice < current * 0.98 Then Return choice
@@ -1548,6 +1577,7 @@ Sub ApplyFacing(drawView As DrawingView, model As Document, commandName As Strin
 End Sub
 
 Sub TryAddOverall(sheet As Sheet, view As DrawingView, horizontal As Boolean, tg As TransientGeometry)
+    ' Assembly overall size only. 1.8 cm below the view, 1.6 cm to the left.
     Try
         Dim minCurve As DrawingCurve = Nothing
         Dim maxCurve As DrawingCurve = Nothing
@@ -1588,6 +1618,7 @@ Sub TryAddOverall(sheet As Sheet, view As DrawingView, horizontal As Boolean, tg
 End Sub
 
 Sub PlaceLabelAbove(view As DrawingView, tg As TransientGeometry)
+    ' 0.85 cm from the top of the view to the FRONT or SIDE label.
     If view Is Nothing OrElse view.Position Is Nothing Then Return
     Try
         Dim labelY As Double = view.Position.Y + view.Height / 2 + 0.85
@@ -1691,6 +1722,11 @@ Function SameMeasure(a As Double, b As Double) As Boolean
 End Function
 
 Sub DimensionDirection(sheet As Sheet, view As DrawingView, tg As TransientGeometry, curves As List(Of DrawingCurve), values As List(Of Double), owners As List(Of Integer), kinds As List(Of Integer), horizontal As Boolean)
+    ' Part dimensions for one direction. Always the overall size.
+    ' A wall is a gap of at least 0.08 cm on the sheet and at most 25 percent
+    ' of the overall. At most two different walls are kept. A matching wall
+    ' on the other side is not repeated. Raise 0.25 to call out larger gaps.
+    ' Raise the 2 in keptCount to allow more than two walls.
     Try
         If values.Count < 2 Then Return
         OrderStations(values, owners, kinds)
@@ -1768,6 +1804,8 @@ Sub PlaceStationDim(sheet As Sheet, view As DrawingView, tg As TransientGeometry
         Dim intentB As GeometryIntent = CurveIntent(sheet, curves(owners(indexB)), kinds(indexB))
         If intentA Is Nothing OrElse intentB Is Nothing Then Return
         Dim midEdge As Double = (valueA + valueB) / 2
+        ' Centimeters from the view edge to the dimension text.
+        ' 1.25 is the wall thickness. 2.55 is the overall, outside that.
         Dim offset As Double = 1.25
         If levelIndex > 0 Then offset = 2.55
         Dim textPoint As Point2d
@@ -1804,6 +1842,8 @@ Function CurveIntent(sheet As Sheet, curve As DrawingCurve, kind As Integer) As 
 End Function
 
 Sub AddRoundSizes(sheet As Sheet, view As DrawingView, tg As TransientGeometry)
+    ' One fillet radius and one hole diameter per view. The 1 on arcCount
+    ' and holeCount is that limit. 0.08 cm skips a tiny radius.
     If view Is Nothing OrElse view.Position Is Nothing Then Return
     Dim arcCount As Integer = 0
     Dim holeCount As Integer = 0
@@ -1958,6 +1998,10 @@ Sub SheetCorner(sheet As Sheet, ByRef leftLimit As Double, ByRef topLimit As Dou
 End Sub
 
 Sub FitPartsListColumns(table As PartsList)
+    ' Parts-list column widths, in centimeters.
+    ' Item and qty stay between 1.05 and 2.05.
+    ' Part number stays between 2.0 and 7.2.
+    ' The description width is chosen in DescriptionWidth.
     Dim colIndex As Integer = 1
     Do While colIndex <= table.PartsListColumns.Count
         Dim col As PartsListColumn = table.PartsListColumns.Item(colIndex)
@@ -2039,7 +2083,9 @@ Function PlainLength(text As String) As Integer
 End Function
 
 Function ColumnKind(col As PartsListColumn) As Integer
-    ' PropertyTypeEnum has no parts-list members, so the heading text decides the column.
+    ' Heading text decides the column. 2 is quantity, 1 is item,
+    ' 3 is part number, and 0 is description. Quantity is checked
+    ' before item so a heading that says both is treated as quantity.
     Dim title As String = ""
     Try
         If col.Title IsNot Nothing Then title = col.Title.ToUpper()
@@ -2141,6 +2187,9 @@ Sub SeatPartsList(drawDoc As DrawingDocument, sheet As Sheet, table As PartsList
 End Sub
 
 Function AddItemBalloons(sheet As Sheet, model As Document, views As Dictionary(Of String, DrawingView), tg As TransientGeometry) As String
+    ' One balloon per parts-list row, on the isometric view, just outside
+    ' that part. A single part (one occurrence and one row) gets none.
+    ' The reach distance is set in TipOutside.
     Try
         Dim asm As AssemblyDocument = model
         Dim occurrenceCount As Integer = CountOccurrences(asm)
@@ -2343,6 +2392,8 @@ Function TipOutside(sheet As Sheet, host As DrawingView, minX As Double, minY As
     End If
     Dim dx As Double = px - vx
     Dim dy As Double = py - vy
+    ' Centimeters from the part edge to the balloon. Raise it to stand
+    ' farther off the part. Lower it to sit closer.
     Dim reach As Double = 0.42
     Dim tipX As Double = px
     Dim tipY As Double = py
